@@ -27,12 +27,26 @@ import (
 // git's progress output. On failure, the progress already streamed to
 // progress is also folded into the returned error.
 func Clone(ctx context.Context, remoteURL, dest string, progress io.Writer) error {
+	return CloneWithConfig(ctx, remoteURL, dest, nil, progress)
+}
+
+// CloneWithConfig is Clone, pinning every entry of config through "git
+// clone -c key=value" before the remote is even fetched: the mechanism
+// "gitcd clone --profile" uses to apply an identity at clone time, rather
+// than relying on the includeIf chain "gitcd apply" renders.
+func CloneWithConfig(ctx context.Context, remoteURL, dest string, config map[string]string, progress io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return fmt.Errorf("git: create %s: %w", filepath.Dir(dest), err)
 	}
 
+	args := []string{"clone"}
+	for _, key := range sortedConfigPairs(config) {
+		args = append(args, "-c", key+"="+config[key])
+	}
+	args = append(args, "--", remoteURL, dest)
+
 	var captured bytes.Buffer
-	cmd := exec.CommandContext(ctx, "git", "clone", "--", remoteURL, dest)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Stderr = io.MultiWriter(progress, &captured)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git: clone %s into %s: %w: %s", remoteURL, dest, err, strings.TrimSpace(captured.String()))

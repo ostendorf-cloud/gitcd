@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package config loads gitcd's own configuration: the clone root, the path
-// layout per host and the alias map a host's SSH host names resolve
-// through. It never touches git configuration, which belongs to a later
-// milestone.
+// layout per host, the alias map a host's SSH host names resolve through,
+// and the identity profiles and rules that decide which profile applies to
+// a remote. It never writes git configuration itself, which belongs to
+// internal/git and internal/gitconfig.
 package config
 
 import (
@@ -13,6 +14,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -37,6 +40,64 @@ const defaultAzureLayout = "{host}/{org}/{project}/{repo}"
 // ErrUnknownKey is wrapped into the error Load returns when the
 // configuration file carries a key this package does not recognise.
 var ErrUnknownKey = errors.New("config: unknown key")
+
+// ErrInvalidProfile is wrapped into the error Load returns when a profile,
+// a rule or defaultProfile is malformed: a profile key that is not a valid
+// "section.key" git config key, a profile key under the "remote" section, a
+// rule naming a profile that does not exist, a rule with no host, a rule
+// with a repository but no owner, or a defaultProfile naming a profile that
+// does not exist.
+var ErrInvalidProfile = errors.New("config: invalid profile configuration")
+
+// configKeySection matches the section a git config key's "section.key" or
+// "section.subsection.key" form starts with: a letter followed by letters,
+// digits or "-".
+var configKeySection = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
+
+// configKeyName matches the final segment of a git config key, after its
+// last ".".
+var configKeyName = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+
+// Profile is one named identity: a map from a git config key, in
+// "section.key" form, to the string value it should carry. Values are git
+// config strings: a boolean is written as "true" or "false", quoted like
+// every other value.
+type Profile map[string]string
+
+// Rule matches a remote to a Profile by name. Host is required; Owner and
+// Repo narrow the match further, Repo only meaningful alongside Owner. An
+// empty field matches every value of that field.
+type Rule struct {
+	Host    string
+	Owner   string
+	Repo    string
+	Profile string
+}
+
+// validateConfigKey reports whether key is a syntactically valid git config
+// key in "section.key" form, and rejects a key under the "remote" section:
+// a profile applied through includeIf's hasconfig condition must never
+// carry a remote URL, since that would make the condition depend on its
+// own consequence.
+func validateConfigKey(key string) error {
+	firstDot := strings.Index(key, ".")
+	lastDot := strings.LastIndex(key, ".")
+	if firstDot <= 0 || lastDot == len(key)-1 {
+		return fmt.Errorf("config: %w: %q is not a \"section.key\" git config key", ErrInvalidProfile, key)
+	}
+	section := key[:firstDot]
+	name := key[lastDot+1:]
+	if !configKeySection.MatchString(section) {
+		return fmt.Errorf("config: %w: %q has an invalid section name", ErrInvalidProfile, key)
+	}
+	if !configKeyName.MatchString(name) {
+		return fmt.Errorf("config: %w: %q has an invalid key name", ErrInvalidProfile, key)
+	}
+	if strings.EqualFold(section, "remote") {
+		return fmt.Errorf("config: %w: %q sets a remote.* key, which a profile may not carry", ErrInvalidProfile, key)
+	}
+	return nil
+}
 
 // Host is one entry of the "hosts" map: the per host path layout, the SSH
 // host aliases that resolve to it, and the protocol clone prefers.
@@ -65,13 +126,29 @@ type Config struct {
 	Default string
 	// Hosts maps a lowercased canonical host name to its settings.
 	Hosts map[string]Host
+	// Profiles maps a profile name to the git config keys it carries.
+	Profiles map[string]Profile
+	// Rules decides which Profiles entry a remote resolves to. Order here
+	// is the order the file lists them in, not the order gitcd applies
+	// them in: see internal/profile.SortRules.
+	Rules []Rule
+	// DefaultProfile is the profile applied to a remote no Rule matches.
+	// Empty when the file sets none, in which case a remote no rule
+	// matches gets no profile.
+	DefaultProfile string
+	// UseConfigOnly adds "user.useConfigOnly = true" to every rendered
+	// profile, so a repository whose identity gitcd cannot determine
+	// refuses to commit rather than falling back to a machine wide
+	// identity. True unless the file opts out with "useConfigOnly: false".
+	UseConfigOnly bool
 }
 
 // Default returns the configuration applied when no file exists.
 func Default() Config {
 	return Config{
-		Root:    DefaultRoot,
-		Default: DefaultLayout,
+		Root:          DefaultRoot,
+		Default:       DefaultLayout,
+		UseConfigOnly: true,
 		Hosts: map[string]Host{
 			"dev.azure.com": {
 				Layout:  defaultAzureLayout,
@@ -93,12 +170,24 @@ type rawLayout struct {
 	Default *string `yaml:"default"`
 }
 
+// rawRule mirrors Rule for decoding.
+type rawRule struct {
+	Host    string `yaml:"host"`
+	Owner   string `yaml:"owner"`
+	Repo    string `yaml:"repo"`
+	Profile string `yaml:"profile"`
+}
+
 // raw mirrors Config with every field optional, decoded with KnownFields so
 // an unrecognised key fails loudly instead of being silently ignored.
 type raw struct {
-	Root   *string            `yaml:"root"`
-	Layout *rawLayout         `yaml:"layout"`
-	Hosts  map[string]rawHost `yaml:"hosts"`
+	Root           *string                      `yaml:"root"`
+	Layout         *rawLayout                   `yaml:"layout"`
+	Hosts          map[string]rawHost           `yaml:"hosts"`
+	Profiles       map[string]map[string]string `yaml:"profiles"`
+	Rules          []rawRule                    `yaml:"rules"`
+	DefaultProfile *string                      `yaml:"defaultProfile"`
+	UseConfigOnly  *bool                        `yaml:"useConfigOnly"`
 }
 
 // Load reads the first of ~/.gitcd.yaml and $XDG_CONFIG_HOME/gitcd/config.yaml
@@ -213,6 +302,51 @@ func LoadFrom(path string) (cfg Config, err error) {
 		cfg.Hosts[host] = h
 	}
 
+	if r.UseConfigOnly != nil {
+		cfg.UseConfigOnly = *r.UseConfigOnly
+	}
+
+	if len(r.Profiles) > 0 {
+		cfg.Profiles = make(map[string]Profile, len(r.Profiles))
+		for name, keys := range r.Profiles {
+			profile := make(Profile, len(keys))
+			for key, value := range keys {
+				if err := validateConfigKey(key); err != nil {
+					return Config{}, fmt.Errorf("config: parse %s: profile %q: %w", path, name, err)
+				}
+				profile[key] = value
+			}
+			cfg.Profiles[name] = profile
+		}
+	}
+
+	for _, rr := range r.Rules {
+		rule := Rule{Host: strings.ToLower(rr.Host), Owner: rr.Owner, Repo: rr.Repo, Profile: rr.Profile}
+		if rule.Host == "" {
+			return Config{}, fmt.Errorf("config: parse %s: %w: a rule needs a host", path, ErrInvalidProfile)
+		}
+		if rule.Repo != "" && rule.Owner == "" {
+			return Config{}, fmt.Errorf(
+				"config: parse %s: %w: rule for host %q names a repo without an owner", path, ErrInvalidProfile, rule.Host,
+			)
+		}
+		if _, ok := cfg.Profiles[rule.Profile]; !ok {
+			return Config{}, fmt.Errorf(
+				"config: parse %s: %w: rule for host %q names the undefined profile %q", path, ErrInvalidProfile, rule.Host, rule.Profile,
+			)
+		}
+		cfg.Rules = append(cfg.Rules, rule)
+	}
+
+	if r.DefaultProfile != nil {
+		cfg.DefaultProfile = *r.DefaultProfile
+		if _, ok := cfg.Profiles[cfg.DefaultProfile]; !ok {
+			return Config{}, fmt.Errorf(
+				"config: parse %s: %w: defaultProfile names the undefined profile %q", path, ErrInvalidProfile, cfg.DefaultProfile,
+			)
+		}
+	}
+
 	return cfg, nil
 }
 
@@ -249,6 +383,17 @@ func (c Config) AliasMap() map[string]string {
 		}
 	}
 	return aliases
+}
+
+// Keys returns p's git config keys, sorted, so a caller that writes or
+// renders them gets a deterministic order.
+func (p Profile) Keys() []string {
+	keys := make([]string, 0, len(p))
+	for k := range p {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // LayoutFor returns the path template host, already lowercased, should

@@ -43,6 +43,19 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// runGitOutput is runGit, returning git's trimmed stdout instead of
+// discarding it.
+func runGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // initRepository creates a git repository under dir with one committed
 // file, a source test commands can clone from without reaching the
 // network.

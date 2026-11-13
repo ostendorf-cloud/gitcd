@@ -81,8 +81,6 @@
   aliases already cover it. Next step: settle while building M1b's profile resolver.
 - Should gitcd manage an allowed signers file for SSH signature verification. Next step: open
   during M1b if a user asks for verification, not before.
-- Whether `url.<base>.insteadOf` rewriting happens before `hasconfig` matching is unverified.
-  Next step: probe it in M1b, since it changes which URL forms a rule must emit.
 - Azure DevOps URL forms, SSH host `ssh.dev.azure.com` with path `v3/{org}/{project}/{repo}`,
   and HTTPS `dev.azure.com/{org}/{project}/_git/{repo}`, are implemented but unverified against
   a real remote. Next step: confirm against an actual Azure DevOps repository.
