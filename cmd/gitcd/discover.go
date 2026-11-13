@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -35,7 +36,7 @@ func discoverRepos(root string) ([]string, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("discover: stat %s: %w", root, err)
 	}
 
 	var repos []string
@@ -59,7 +60,7 @@ func discoverRepos(root string) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("discover: walk %s: %w", root, err)
 	}
 	sort.Strings(repos)
 	return repos, nil

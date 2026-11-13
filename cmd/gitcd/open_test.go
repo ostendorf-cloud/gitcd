@@ -99,6 +99,52 @@ func TestRunOpen_PrintFallsBackToAGenericURLForAnUnknownHostShape(t *testing.T) 
 	}
 }
 
+// TestRunOpen_PrintResolvesEveryForgeShapeFromTheCommand covers the forge
+// shapes end to end rather than only through the remote package: Azure
+// DevOps keeps its "_git" segment, while GitLab takes the generic owner
+// and repository path even when the owner carries a subgroup.
+func TestRunOpen_PrintResolvesEveryForgeShapeFromTheCommand(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   []string
+		remote string
+		query  string
+		want   string
+	}{
+		{
+			name:   "gitlab subgroup keeps every owner segment",
+			path:   []string{"gitlab.com", "acme", "team", "widget"},
+			remote: "https://gitlab.com/acme/team/widget.git",
+			query:  "gitlab.com/acme/team/widget",
+			want:   "https://gitlab.com/acme/team/widget",
+		},
+		{
+			name:   "azure devops keeps its _git segment",
+			path:   []string{"dev.azure.com", "acme", "Widget", "widget"},
+			remote: "https://dev.azure.com/acme/Widget/_git/widget",
+			query:  "widget",
+			want:   "https://dev.azure.com/acme/Widget/_git/widget",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := setupEnv(t)
+			dest := filepath.Join(append([]string{home, "Code"}, tt.path...)...)
+			initRepository(t, dest)
+			runGit(t, dest, "remote", "add", "origin", tt.remote)
+
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"open", "--print", tt.query}, &stdout, &stderr); code != 0 {
+				t.Fatalf("open --print = %d, want 0, stderr: %s", code, stderr.String())
+			}
+			if got := strings.TrimSpace(stdout.String()); got != tt.want {
+				t.Fatalf("open --print stdout = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunOpen_NoMatchFails(t *testing.T) {
 	setupEnv(t)
 
