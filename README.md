@@ -72,6 +72,14 @@ hosts:
 A template is built from `{host}`, `{owner}` (`{org}` reads the same field, for an Azure DevOps
 template), `{project}` and `{repo}`. An unknown key anywhere in the file is rejected.
 
+A host built into the defaults, `dev.azure.com` today, already carries a layout and aliases.
+A `hosts` entry for that host merges field by field onto the default entry: setting `aliases`
+without `layout` keeps the default layout, and setting `layout` without `aliases` keeps the
+default aliases. To clear a default's `aliases` deliberately, set it to an empty list,
+`aliases: []`; to clear a default's `layout` deliberately, set it to an empty string,
+`layout: ""`, which then falls back to `layout.default` exactly like a host with no `layout`
+key at all. See `docs/adr/0001-host-config-merges-field-by-field.md`.
+
 ## Development
 
 ```sh
