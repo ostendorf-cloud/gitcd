@@ -18,10 +18,18 @@ not repeated here.
   repository on disk for the profile it actually carries.
 - `internal/gitconfig/`: renders the profile files and the include file `apply` writes; it
   never writes a file itself.
+- `internal/status/`: reads one repository's branch, dirty and ahead or behind state out of
+  `git status --porcelain=v2 --branch`, an unborn HEAD and a branch with no upstream rendered
+  as an explicit state rather than a missing field.
+- `internal/gitsync/`: fetches a set of repositories through a bounded pool of workers; never
+  pulls, rebases or merges. Named apart from `sync` so no caller shadows the standard library
+  package of that name.
 - `internal/shell/`: the per shell init snippet `shell-init` prints.
 
-`list`, `cd`, `doctor`, `adopt`, `status` and `sync` are later milestones, tracked as issues;
-their own packages land with them.
+`list`, `cd`, `doctor` and `adopt` are later milestones, tracked as issues; their own packages
+land with them. `cmd/gitcd/discover.go` walks the configured root for `status`, `sync` and
+`open`; issue #3's `internal/scan` walks the same ground for `list`, `doctor` and `adopt` with
+a richer value, and the two should be reconciled into one once both have landed.
 
 ## Commands
 

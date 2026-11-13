@@ -27,6 +27,9 @@ Commands:
   init         add the identity profile include to the global git config
   apply        render and write the identity profile files
   profile      pin, remove or inspect a repository's identity profile
+  status       print branch, dirty and ahead or behind state for every repository
+  sync         fetch every repository with a bounded pool, never pulling or merging
+  open         open a repository's remote in a browser
   shell-init   print the shell integration snippet for zsh, bash or fish
   version      print the version
 
@@ -56,6 +59,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runApply(args[1:], stdout, stderr)
 	case "profile":
 		return runProfile(args[1:], stdout, stderr)
+	case "status":
+		return runStatus(args[1:], stdout, stderr)
+	case "sync":
+		return runSync(args[1:], stdout, stderr)
+	case "open":
+		return runOpen(args[1:], stdout, stderr)
 	case "shell-init":
 		return runShellInit(args[1:], stdout, stderr)
 	case "help", "-h", "--help":

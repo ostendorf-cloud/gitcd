@@ -7,13 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
-	"github.com/ostendorf-cloud/gitcd/internal/git"
 	"github.com/ostendorf-cloud/gitcd/internal/layout"
 	"github.com/ostendorf-cloud/gitcd/internal/remote"
 )
@@ -99,42 +97,19 @@ func pathFromName(stdout, stderr io.Writer, cfg config.Config, name string) int 
 	}
 }
 
-// findByName walks root for every directory whose own name is exactly
-// name and which is itself a repository. It stops descending once it
-// finds one, so a submodule or a linked worktree nested inside a match is
-// never itself reported as a separate match.
+// findByName reports every repository under root whose own directory
+// name is exactly name, built on discoverRepos's walk.
 func findByName(root, name string) ([]string, error) {
-	if _, err := os.Stat(root); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+	repos, err := discoverRepos(root)
+	if err != nil {
 		return nil, err
 	}
 
 	var matches []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, path := range repos {
+		if filepath.Base(path) == name {
+			matches = append(matches, path)
 		}
-		if !d.IsDir() {
-			return nil
-		}
-		if d.Name() == ".git" {
-			return filepath.SkipDir
-		}
-		if path == root {
-			return nil
-		}
-		if git.IsRepository(path) {
-			if d.Name() == name {
-				matches = append(matches, path)
-			}
-			return filepath.SkipDir
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	return matches, nil
 }
