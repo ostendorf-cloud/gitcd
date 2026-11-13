@@ -65,6 +65,24 @@ func TestInit_EveryWrittenSnippetGuardsCloneAndPath(t *testing.T) {
 	}
 }
 
+// TestBashLike_GuardsCdOnTheTargetActuallyExisting checks that neither the
+// bash and zsh snippet nor the fish snippet changes directory on a path
+// "clone --dry-run" printed without ever creating, which would otherwise
+// break the command's own acceptance criterion. fish is not installed in
+// this environment, so its guard is checked by inspecting the rendered
+// snippet rather than by running it; see the doc comment on the fish
+// constant for the fish semantics this guard relies on.
+func TestBashLike_GuardsCdOnTheTargetActuallyExisting(t *testing.T) {
+	t.Parallel()
+
+	if !strings.Contains(shell.Bash(), `[ -d "$real" ]`) {
+		t.Fatalf("bash/zsh snippet does not guard cd on the target existing: %s", shell.Bash())
+	}
+	if !strings.Contains(shell.Fish(), `test -d "$real"`) {
+		t.Fatalf("fish snippet does not guard cd on the target existing: %s", shell.Fish())
+	}
+}
+
 func TestBashAndZshSnippetsAreSyntacticallyValid(t *testing.T) {
 	t.Parallel()
 

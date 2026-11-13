@@ -5,9 +5,10 @@
 // prints. Each snippet defines a "gitcd" function that shadows the binary:
 // it calls through to the real "gitcd" for every command, and for "clone"
 // and "path", the two commands that print a path on stdout, changes the
-// shell's working directory to it instead of printing it. Every other
-// command's output passes through unchanged, because the binary itself
-// already put it on stdout for exactly this purpose.
+// shell's working directory to it when that path actually exists, since
+// "clone --dry-run" prints a path it deliberately never created. Every
+// other command's output passes through unchanged, because the binary
+// itself already put it on stdout for exactly this purpose.
 package shell
 
 import "fmt"
@@ -19,7 +20,11 @@ const bashLike = `gitcd() {
   real="$(command gitcd "$@")" || return $?
   case "$1" in
     clone|path)
-      cd -- "$real"
+      if [ -d "$real" ]; then
+        cd -- "$real"
+      else
+        printf '%s\n' "$real"
+      fi
       ;;
     *)
       printf '%s\n' "$real"
@@ -28,6 +33,18 @@ const bashLike = `gitcd() {
 }
 `
 
+// fish is the "gitcd" function body for fish, whose syntax for a local
+// variable, a command substitution and a switch differs from bashLike's.
+// "set -l code $status" reads the exit status of the command substitution
+// on the line above, not of "set" itself: fish documents that a command
+// substitution's exit status lands in $status when the substitution
+// happens in the context of "set" (fishshell.com/docs/current/language.html,
+// "Command substitution"), and that value is still the one $status holds
+// when the next line reads it, since the right hand side of "set -l code
+// $status" is expanded before that "set" runs and could overwrite $status
+// again. The guard below is still needed regardless: "cd" with no argument
+// goes to $HOME (fishshell.com/docs/current/cmds/cd.html), so an empty
+// "$real" must never reach it unguarded.
 const fish = `function gitcd
     set -l real (command gitcd $argv)
     set -l code $status
@@ -36,7 +53,11 @@ const fish = `function gitcd
     end
     switch $argv[1]
         case clone path
-            cd $real
+            if test -d "$real"
+                cd $real
+            else
+                printf '%s\n' $real
+            end
         case '*'
             printf '%s\n' $real
     end
