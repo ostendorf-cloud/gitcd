@@ -99,17 +99,27 @@ func runProfileSet(args []string, stdout, stderr io.Writer) int {
 		}
 		logger.Debug("wrote a local config key", "path", path, "key", key)
 	}
-	if err := git.ConfigSetLocal(ctx, path, "gitcd.profile", name); err != nil {
-		fmt.Fprintf(stderr, "gitcd profile set: %v\n", err)
-		return 1
-	}
-	if err := git.ConfigSetLocal(ctx, path, "gitcd.keys", strings.Join(keys, ",")); err != nil {
+	if err := writeProfileMarkers(ctx, path, name, prof); err != nil {
 		fmt.Fprintf(stderr, "gitcd profile set: %v\n", err)
 		return 1
 	}
 
 	fmt.Fprintln(stdout, name)
 	return 0
+}
+
+// writeProfileMarkers writes the "gitcd.profile" and "gitcd.keys" markers
+// to path's local configuration, naming name and prof's own keys: the
+// record "profile unset" later reads back to know exactly what to remove,
+// and "doctor" will need to tell a deliberate pin from stale config.
+// Every place that pins a profile outside the includeIf chain, "profile
+// set" and "clone --profile" alike, writes both, or "profile unset"
+// cannot clean up what it created.
+func writeProfileMarkers(ctx context.Context, path, name string, prof config.Profile) error {
+	if err := git.ConfigSetLocal(ctx, path, "gitcd.profile", name); err != nil {
+		return err
+	}
+	return git.ConfigSetLocal(ctx, path, "gitcd.keys", strings.Join(prof.Keys(), ","))
 }
 
 // runProfileUnset implements "gitcd profile unset [path]": it removes
@@ -179,9 +189,9 @@ func runProfileUnset(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if len(leftovers) > 0 {
-		fmt.Fprintln(stdout, "already removed outside gitcd, nothing left to unset:")
+		fmt.Fprintln(stderr, "already removed outside gitcd, nothing left to unset:")
 		for _, key := range leftovers {
-			fmt.Fprintf(stdout, "  %s\n", key)
+			fmt.Fprintf(stderr, "  %s\n", key)
 		}
 		return 1
 	}

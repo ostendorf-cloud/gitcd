@@ -220,6 +220,56 @@ profiles:
 	}
 }
 
+// TestRunClone_ProfileWritesMarkersThatUnsetCanRemove guards against
+// "clone --profile" pinning keys through "git clone -c" without recording
+// the same "gitcd.profile" and "gitcd.keys" markers "profile set" writes:
+// without them, "profile unset" has nothing to read back and refuses to
+// clean up what the clone pinned.
+func TestRunClone_ProfileWritesMarkersThatUnsetCanRemove(t *testing.T) {
+	home := setupEnv(t)
+
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+profiles:
+  work:
+    user.name: Work Identity
+    user.email: work@example.test
+`)
+
+	source := filepath.Join(home, "upstream")
+	initRepository(t, source)
+	input := "https://example.test/acme/widget.git"
+	runGit(t, home, "config", "--global", "url.file://"+source+".insteadOf", input)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"clone", "--profile", "work", input}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("clone --profile work = %d, want 0, stderr: %s", code, stderr.String())
+	}
+	dest := strings.TrimSpace(stdout.String())
+
+	if got := runGitOutput(t, dest, "config", "--local", "--get", "gitcd.profile"); got != "work" {
+		t.Fatalf("gitcd.profile = %q, want %q", got, "work")
+	}
+	keys := runGitOutput(t, dest, "config", "--local", "--get", "gitcd.keys")
+	for _, want := range []string{"user.name", "user.email"} {
+		if !strings.Contains(keys, want) {
+			t.Fatalf("gitcd.keys = %q, want it to list %q", keys, want)
+		}
+	}
+
+	var unsetStdout, unsetStderr bytes.Buffer
+	unsetCode := run([]string{"profile", "unset", dest}, &unsetStdout, &unsetStderr)
+	if unsetCode != 0 {
+		t.Fatalf("profile unset after clone --profile = %d, want 0, stderr: %s", unsetCode, unsetStderr.String())
+	}
+	if localConfigGet(t, dest, "user.email") == nil {
+		t.Fatal("profile unset after clone --profile left user.email set")
+	}
+	if localConfigGet(t, dest, "gitcd.profile") == nil {
+		t.Fatal("profile unset after clone --profile left the gitcd.profile marker set")
+	}
+}
+
 func TestRunClone_UnknownProfileFails(t *testing.T) {
 	home := setupEnv(t)
 	source := filepath.Join(home, "upstream")

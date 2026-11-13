@@ -105,6 +105,13 @@ func runClone(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	if *profileName != "" {
+		if err := writeProfileMarkers(ctx, dest, *profileName, pinned); err != nil {
+			fmt.Fprintf(stderr, "gitcd clone: %v\n", err)
+			return 1
+		}
+	}
+
 	fmt.Fprintln(stdout, dest)
 	logIdentity(ctx, stderr, cfg, dest)
 	return 0

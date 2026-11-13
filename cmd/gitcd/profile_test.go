@@ -124,7 +124,9 @@ func TestRunProfileUnset(t *testing.T) {
 		}
 	})
 
-	t.Run("reports a recorded key that config drift already removed", func(t *testing.T) {
+	t.Run("reports a recorded key that config drift already removed, on stderr", func(t *testing.T) {
+		// AGENTS.md: a command writes nothing but its result to stdout;
+		// everything else, this diagnostic included, goes to stderr.
 		home := setupEnv(t)
 		writeProfileConfig(t, home)
 		repo := filepath.Join(home, "repo")
@@ -137,8 +139,11 @@ func TestRunProfileUnset(t *testing.T) {
 		if code == 0 {
 			t.Fatal("profile unset = 0, want a non-zero exit reporting the leftover")
 		}
-		if !strings.Contains(stdout.String(), "user.signingkey") {
-			t.Fatalf("profile unset stdout = %q, want it to report the already missing key", stdout.String())
+		if !strings.Contains(stderr.String(), "user.signingkey") {
+			t.Fatalf("profile unset stderr = %q, want it to report the already missing key", stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("profile unset stdout = %q, want the leftover report on stderr instead", stdout.String())
 		}
 	})
 
