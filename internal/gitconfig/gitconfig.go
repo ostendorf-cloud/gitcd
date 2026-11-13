@@ -118,14 +118,34 @@ func RenderProfile(p config.Profile, useConfigOnly bool) (string, error) {
 	return b.String(), nil
 }
 
-// renderIncludes renders the include file: one plain "[include]" for
-// cfg.DefaultProfile, then one "[includeIf]" block per URL form and one
-// "[includeIf \"gitdir/i:...\"]" block, per rule, in ascending specificity
-// order, so a later, more specific block always wins over an earlier, less
-// specific one, regardless of the configuration file's own rule order.
+// renderIncludes renders the include file: an unconditional
+// "user.useConfigOnly" when cfg.UseConfigOnly is set, then one plain
+// "[include]" for cfg.DefaultProfile, then one "[includeIf]" block per URL
+// form and one "[includeIf \"gitdir/i:...\"]" block, per rule, in ascending
+// specificity order, so a later, more specific block always wins over an
+// earlier, less specific one, regardless of the configuration file's own
+// rule order.
+//
+// The unconditional block is load bearing, not decorative: every other
+// "useConfigOnly" this package writes sits inside a profile file, reached
+// only through an includeIf condition, so it only ever applies to a
+// repository some rule, or the default profile, already matches. A
+// repository no rule matches, and no default profile covers, reaches
+// neither, so without this unconditional copy it carries no
+// "useConfigOnly" at all, and git falls back to guessing an identity from
+// the account's username and hostname, silently, exactly the outcome a
+// repository with an undetermined identity is supposed to refuse.
+// Verified directly against git 2.54.0: with this block removed, a
+// repository under neither a rule nor a default profile committed
+// successfully under a guessed identity despite every profile file
+// itself setting "useConfigOnly = true".
 func renderIncludes(cfg config.Config, home string) string {
 	var b strings.Builder
 	b.WriteString(generatedHeader)
+
+	if cfg.UseConfigOnly {
+		b.WriteString("\n[user]\n\tuseConfigOnly = true\n")
+	}
 
 	if cfg.DefaultProfile != "" {
 		fmt.Fprintf(&b, "\n[include]\n\tpath = %s\n", quoteValue(ProfilePath(home, cfg.DefaultProfile)))

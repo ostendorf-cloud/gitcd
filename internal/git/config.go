@@ -112,6 +112,21 @@ func ConfigUnsetLocal(ctx context.Context, path, key string) error {
 	return nil
 }
 
+// ConfigUnsetGlobal runs "git config --global --unset-all key", removing
+// every global value key carries. It wraps ErrConfigKeyNotSet, rather than
+// failing, when key already carries no global value.
+func ConfigUnsetGlobal(ctx context.Context, key string) error {
+	cmd := exec.CommandContext(ctx, "git", "config", "--global", "--unset-all", key)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 5 {
+			return fmt.Errorf("git: unset global %s: %w", key, ErrConfigKeyNotSet)
+		}
+		return fmt.Errorf("git: unset global %s: %w: %s", key, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // ConfigValue is one git config key's effective value together with the
 // file git read it from.
 type ConfigValue struct {
@@ -187,8 +202,10 @@ func revParsePath(ctx context.Context, path, arg string) (string, error) {
 var configSectionHeader = regexp.MustCompile(`^\s*\[\s*([A-Za-z0-9_.-]+)(?:\s+"([^"]*)")?\s*\]`)
 
 // configKeyLine matches a git config key assignment line, capturing the
-// key name.
-var configKeyLine = regexp.MustCompile(`^\s*([A-Za-z][A-Za-z0-9-]*)\s*(?:=.*)?$`)
+// key name, whether it carries an explicit "=" (group 2, literally "=" or
+// unmatched), and, when it does, the value's raw text after it (group 3),
+// not yet unquoted.
+var configKeyLine = regexp.MustCompile(`^\s*([A-Za-z][A-Za-z0-9-]*)\s*(?:(=)\s*(.*))?$`)
 
 // IdentityKeyAfterInclude reports whether any of keys sits, in file order,
 // after the last bare "[include]" section (no subsection) that content
@@ -199,6 +216,15 @@ var configKeyLine = regexp.MustCompile(`^\s*([A-Za-z][A-Za-z0-9-]*)\s*(?:=.*)?$`
 // silently. found is false, with no error, when content carries no bare
 // "[include]" section at all, or when no key in keys sits after the one it
 // does carry.
+//
+// This is a narrower, ordering only concern: a key sitting before the
+// include is "safe" by this function's own definition only in the sense
+// that it is never overridden by a value gitcd's own includeIf chain
+// sets. It says nothing about FindGlobalIdentityValues' concern, which is
+// broader and applies regardless of position: any of these keys set
+// directly anywhere in this file is already "configuration" by git's own
+// definition, so it is used for every repository, matched by some rule or
+// not, with or without ever reaching this function's notion of "after".
 func IdentityKeyAfterInclude(content []byte, keys []string) (key string, found bool, err error) {
 	lines := strings.Split(string(content), "\n")
 
@@ -243,6 +269,90 @@ func IdentityKeyAfterInclude(content []byte, keys []string) (key string, found b
 		}
 	}
 	return "", false, nil
+}
+
+// GlobalIdentityValue is one identity key the global git configuration
+// sets directly, with the value it carries.
+type GlobalIdentityValue struct {
+	Key   string
+	Value string
+}
+
+// FindGlobalIdentityValues scans content, the raw text of the user's
+// global git configuration file, for every key in keys that it sets
+// directly, in content's own file order, regardless of position relative
+// to any "[include]" or "[includeIf]" section: a key set this way is
+// already "configuration" by git's own definition, so
+// "user.useConfigOnly" never suppresses it, and it applies to every
+// repository gitcd manages, one some rule matches or not, exactly the gap
+// IdentityKeyAfterInclude's narrower, ordering only check does not cover.
+// The returned slice is ordered the same as keys, one entry per key that
+// is set, carrying the last value assigned to it when content sets it
+// more than once, consistent with git's own "last value wins" semantics
+// for a single valued key.
+func FindGlobalIdentityValues(content []byte, keys []string) []GlobalIdentityValue {
+	wanted := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		wanted[strings.ToLower(k)] = true
+	}
+
+	values := make(map[string]string, len(keys))
+	section := ""
+	for _, line := range strings.Split(string(content), "\n") {
+		if m := configSectionHeader.FindStringSubmatch(line); m != nil {
+			section = strings.ToLower(m[1])
+			continue
+		}
+		if section == "" {
+			continue
+		}
+		m := configKeyLine.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		full := section + "." + strings.ToLower(m[1])
+		if !wanted[full] {
+			continue
+		}
+		if m[2] != "=" {
+			// A bare key with no "=" at all carries the implicit boolean
+			// value "true", the same as "git config --bool" reports it.
+			values[full] = "true"
+			continue
+		}
+		values[full] = parseConfigValue(m[3])
+	}
+
+	var found []GlobalIdentityValue
+	for _, k := range keys {
+		if v, ok := values[strings.ToLower(k)]; ok {
+			found = append(found, GlobalIdentityValue{Key: k, Value: v})
+		}
+	}
+	return found
+}
+
+// parseConfigValue extracts a key assignment's value from raw, the text a
+// configKeyLine match captures after its "=". A value quoted with a
+// single pair of double quotes is unquoted, undoing quoteValue's own
+// escaping of "\\" and "\""; git's own handling of a quoted value's
+// escape sequences is otherwise reproduced only for those two characters,
+// which is all gitconfig.quoteValue, the renderer on the other side of
+// this value, ever produces, and all the identity keys this package cares
+// about are ever expected to carry. An unquoted value is trimmed of
+// surrounding whitespace only, with no attempt to strip a trailing
+// comment: this package's other textual checks are equally light, and an
+// identity value carrying an inline "#" or ";" comment is not a shape any
+// of them are expected to see.
+func parseConfigValue(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"' {
+		inner := raw[1 : len(raw)-1]
+		inner = strings.ReplaceAll(inner, `\"`, `"`)
+		inner = strings.ReplaceAll(inner, `\\`, `\`)
+		return inner
+	}
+	return raw
 }
 
 // sortedConfigPairs returns pairs's keys sorted, so a caller building

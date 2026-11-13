@@ -226,6 +226,25 @@ func defaultForHome(home string) (Config, error) {
 	return cfg, nil
 }
 
+// Path returns the configuration file Load reads: the first of its
+// candidate paths that exists, or its primary candidate, "~/.gitcd.yaml"
+// resolved against the calling user's home directory, when neither does.
+// A caller that edits the file a person maintains by hand, "init" moving
+// a global identity key into a profile for instance, writes here, so an
+// edit always lands on the same file Load would read back.
+func Path() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("config: find the home directory: %w", err)
+	}
+	for _, path := range candidatePaths(home) {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	return candidatePaths(home)[0], nil
+}
+
 // candidatePaths lists, in the order Load tries them, the paths a
 // configuration file may live at for a user whose home directory is home.
 func candidatePaths(home string) []string {

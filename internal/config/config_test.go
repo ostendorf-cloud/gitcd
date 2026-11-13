@@ -304,6 +304,47 @@ hosts:
 	})
 }
 
+func TestPath(t *testing.T) {
+	t.Run("the primary candidate when neither file exists", func(t *testing.T) {
+		home := withHome(t)
+
+		got, err := config.Path()
+		if err != nil {
+			t.Fatalf("Path() returned an unexpected error: %v", err)
+		}
+		if want := filepath.Join(home, ".gitcd.yaml"); got != want {
+			t.Fatalf("Path() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("the file Load would read when it already exists", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: ~/elsewhere\n")
+
+		got, err := config.Path()
+		if err != nil {
+			t.Fatalf("Path() returned an unexpected error: %v", err)
+		}
+		if want := filepath.Join(home, ".gitcd.yaml"); got != want {
+			t.Fatalf("Path() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("the xdg fallback when only it exists", func(t *testing.T) {
+		home := withHome(t)
+		xdgPath := filepath.Join(home, ".config", "gitcd", "config.yaml")
+		writeFile(t, xdgPath, "root: ~/elsewhere\n")
+
+		got, err := config.Path()
+		if err != nil {
+			t.Fatalf("Path() returned an unexpected error: %v", err)
+		}
+		if got != xdgPath {
+			t.Fatalf("Path() = %q, want %q", got, xdgPath)
+		}
+	})
+}
+
 func TestLoad_Profiles(t *testing.T) {
 	t.Run("no file ships useConfigOnly true and no profiles", func(t *testing.T) {
 		withHome(t)

@@ -49,6 +49,18 @@
   identity: a generated `includeIf` config for the common case, and a pinned local config
   write for the explicit override, so a repository always has one clear, inspectable reason
   for the identity it carries.
+- `user.useConfigOnly` only stops git from guessing `user.name` and `user.email` from the
+  account's username and hostname; it never suppresses a value that is already configured,
+  from any source. `apply` writes it twice for that reason: unconditionally at the top of the
+  generated include file, so a repository no rule matches and no `defaultProfile` covers still
+  refuses to commit, and again inside every profile file, redundant for a matched repository
+  but needed on its own wherever a profile file is read outside that include chain. Neither
+  copy protects against a `user.name`, `user.email`, `user.signingkey`, `gpg.format` or
+  `commit.gpgsign` set directly in the user's own global git configuration, outside gitcd's
+  generated files: that value is already "configuration" by git's own definition, and applies
+  to every repository, one some rule matches or not. `init` detects exactly this case, reports
+  every such key, and, only when asked, moves it into a profile and removes it from the global
+  file, with a backup.
 - `internal/scan` walks the configured root into repository values for `list`, `doctor` and
   `status` to consume, treating a `.git` file, not only a `.git` directory, as a repository
   boundary, so a linked worktree is never descended into by mistake.
