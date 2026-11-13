@@ -114,6 +114,34 @@ func TestClone(t *testing.T) {
 	})
 }
 
+func TestCloneWithConfig(t *testing.T) {
+	setupGitEnv(t)
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatalf("create %s: %v", source, err)
+	}
+	initRepository(t, source)
+
+	dest := filepath.Join(root, "dest")
+	pin := map[string]string{"user.email": "[email protected]", "user.name": "Pinned User"}
+	if err := git.CloneWithConfig(context.Background(), source, dest, pin, io.Discard); err != nil {
+		t.Fatalf("CloneWithConfig() returned an unexpected error: %v", err)
+	}
+
+	value, ok, err := git.ShowOrigin(context.Background(), dest, "user.email")
+	if err != nil {
+		t.Fatalf("ShowOrigin() returned an unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("ShowOrigin() ok = false, want true: the clone should have pinned user.email")
+	}
+	if value.Value != "[email protected]" {
+		t.Fatalf("ShowOrigin() value = %q, want %q, the value CloneWithConfig pinned", value.Value, "[email protected]")
+	}
+}
+
 func TestRemoteURL(t *testing.T) {
 	setupGitEnv(t)
 
