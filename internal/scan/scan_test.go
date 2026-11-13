@@ -182,6 +182,49 @@ func TestWalk_ReportsALinkedWorktreeWithoutDescendingIntoIt(t *testing.T) {
 	}
 }
 
+// TestWalk_ReportsALinkedWorktreeNestedInsideItsOwnRepository covers the
+// shape TestWalk_ReportsALinkedWorktreeWithoutDescendingIntoIt does not: a
+// linked worktree placed inside its own repository's working tree, at
+// "<repo>/.claude/worktrees/<branch>", exactly the layout this
+// organisation's own worktree convention produces. The repository
+// boundary rule's "filepath.SkipDir" means Walk's own directory walk never
+// looks inside the main checkout to find it, so Walk must surface it some
+// other way, not by walking.
+func TestWalk_ReportsALinkedWorktreeNestedInsideItsOwnRepository(t *testing.T) {
+	home := setupGitEnv(t)
+	root := filepath.Join(home, "Code")
+
+	main := filepath.Join(root, "github.com", "acme", "widget")
+	initRepository(t, main, "https://github.com/acme/widget.git")
+
+	worktree := filepath.Join(main, ".claude", "worktrees", "feat-x")
+	runGit(t, main, "worktree", "add", worktree, "-b", "feat-x")
+
+	results, err := scan.Walk(context.Background(), root, config.Config{}, filepath.Join(home, ".config", "gitcd"))
+	if err != nil {
+		t.Fatalf("Walk() returned an unexpected error: %v", err)
+	}
+
+	got := paths(results)
+	want := []string{main, worktree}
+	sort.Strings(want)
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("Walk() paths = %v, want %v: a worktree nested inside its own repository must still be reported", got, want)
+	}
+
+	for _, r := range results {
+		if r.Err != nil {
+			t.Fatalf("Walk() result for %s carries an unexpected error: %v", r.Repo.Path, r.Err)
+		}
+		if r.Repo.Path == worktree && !r.Repo.IsWorktree {
+			t.Fatalf("Walk() did not mark the nested worktree %s as a worktree", worktree)
+		}
+		if r.Repo.Path == main && r.Repo.IsWorktree {
+			t.Fatalf("Walk() marked the main checkout %s as a worktree", main)
+		}
+	}
+}
+
 // TestWalk_ReportsAnUninspectableRepositoryRatherThanDroppingIt covers a
 // repository Walk finds but profile.Inspect cannot resolve, a clone with
 // no origin remote configured: Walk must still report it, with Err set,
