@@ -137,7 +137,7 @@ func renderIncludes(cfg config.Config, home string) string {
 		gitdirGlob := renderGitdirGlob(cfg, rule)
 		fmt.Fprintf(&b, "\n[includeIf \"gitdir/i:%s\"]\n\tpath = %s\n", gitdirGlob, quoteValue(path))
 
-		for _, urlGlob := range hasconfigGlobs(rule) {
+		for _, urlGlob := range hasconfigGlobs(cfg, rule) {
 			fmt.Fprintf(&b, "\n[includeIf \"hasconfig:remote.*.url:%s\"]\n\tpath = %s\n", urlGlob, quoteValue(path))
 		}
 	}
@@ -180,24 +180,141 @@ func renderGitdirGlob(cfg config.Config, rule config.Rule) string {
 	return filepath.Join(cfg.Root, rendered) + "/**"
 }
 
-// hasconfigGlobs returns one "hasconfig:remote.*.url" glob per URL form
-// rule's host, owner and repo imply: the scp style SSH form and the HTTPS
-// form, since the verified behaviour is that the glob matches the stored
-// URL exactly as written, and the SSH and HTTPS forms of the same
-// repository are written differently. When rule pins a repo, the owner
-// and repo segment is matched literally, once with and once without a
-// trailing ".git", since either is a valid stored remote; otherwise it
-// ends in "**", to match every repository, and in the owner only case
-// every owner-qualified path, under that host.
-func hasconfigGlobs(rule config.Rule) []string {
+// azureDevOpsHost is the canonical host name Azure DevOps rules are
+// configured under, matching the hardcoded spelling internal/remote and
+// internal/config both already key their own Azure DevOps handling on.
+const azureDevOpsHost = "dev.azure.com"
+
+// hasconfigGlobs returns one "hasconfig:remote.*.url" glob per URL form a
+// user could have a rule's host stored as, so that every form
+// remote.Parse accepts and resolves to this host, the host's configured
+// aliases included, is caught by some glob here: the two must agree, or a
+// repository outside the layout root, which only a "hasconfig" block
+// protects, silently falls through to the default profile.
+//
+// A host is reached under its canonical name or any of its configured SSH
+// host aliases alike, since an alias is exactly how a second account on
+// one forge is driven, through a distinct SSH host bound to a distinct
+// key; every form below is therefore rendered once per name in that set.
+// For each name, four forms are emitted: the scp style SSH form
+// ("git@host:path"), the explicit "ssh://" form ("ssh://git@host/path"),
+// plain HTTPS ("https://host/path") and HTTPS carrying userinfo
+// ("https://*@host/path"), since remote.Parse's classify strips any
+// "user@" prefix before the colon or the host, so the literal user never
+// decides the host, yet git stores the remote exactly as written: a
+// repository cloned with a username in its HTTPS URL, Azure DevOps's own
+// convention, or an explicit git@ SSH user never matches the plain forms.
+// Azure DevOps offers no "ssh://" URL at all, only the scp form, so that
+// form is skipped for it.
+//
+// When rule pins a repo, the owner and repo segment is matched literally,
+// once with and once without a trailing ".git", since either is a valid
+// stored remote; when it pins only an owner, the glob ends in "**", to
+// match every repository under that owner; with neither, it matches every
+// repository under the host.
+//
+// Azure DevOps carries a project segment between the owner and the
+// repository that no rule can pin, since config.Rule has no field for it;
+// its path shape also differs by protocol, "v3/<owner>/<project>/<repo>"
+// over SSH against "<owner>/<project>/_git/<repo>" over HTTPS. Both are
+// handled by wildcarding the project segment instead of matching it, and,
+// when the rule pins only an owner or neither, the open "**" already used
+// for every other host also happens to swallow the project segment, so no
+// Azure specific shape is needed there.
+//
+// The scp form's host only tier needs its own path, distinct from every
+// other tier and every other form: verified directly against git 2.54.0,
+// "hasconfig" matches with wildmatch(3) without FNM_PATHNAME, but that
+// flag is not what decides whether "**" crosses a "/": wildmatch only
+// gives "**" its cross slash meaning when a "/" bounds it on both sides,
+// or when it begins the whole pattern or follows one. Every other glob
+// here has a "/" sitting right before its trailing "**", from the
+// pattern's own path separator, so it crosses slashes correctly; the scp
+// host only glob has a bare "**" straight after the literal ":", with no
+// "/" in front of it, so it behaves as a single, non crossing segment and
+// never matches a real "owner/repo" remote. scpRepoPathVariants supplies
+// the missing leading segment and slash for that one tier.
+func hasconfigGlobs(cfg config.Config, rule config.Rule) []string {
+	azure := rule.Host == azureDevOpsHost
+
+	hosts := []string{rule.Host}
+	hosts = append(hosts, cfg.Hosts[rule.Host].Aliases...)
+
 	var globs []string
-	for _, p := range repoPathVariants(rule.Owner, rule.Repo) {
-		globs = append(globs, fmt.Sprintf("git@%s:%s", rule.Host, p))
-		globs = append(globs, fmt.Sprintf("https://%s/%s", rule.Host, p))
+	for _, host := range hosts {
+		for _, p := range scpRepoPathVariants(rule.Owner, rule.Repo, azure) {
+			globs = append(globs, fmt.Sprintf("git@%s:%s", host, p))
+		}
+		if !azure {
+			for _, p := range sshRepoPathVariants(rule.Owner, rule.Repo, azure) {
+				globs = append(globs, fmt.Sprintf("ssh://git@%s/%s", host, p))
+			}
+		}
+		for _, p := range httpsRepoPathVariants(rule.Owner, rule.Repo, azure) {
+			globs = append(globs, fmt.Sprintf("https://%s/%s", host, p))
+			globs = append(globs, fmt.Sprintf("https://*@%s/%s", host, p))
+		}
 	}
 	return globs
 }
 
+// scpRepoPathVariants is sshRepoPathVariants for the scp style
+// "git@host:path" form specifically, differing only in the host only
+// tier, neither owner nor repo pinned: there, sshRepoPathVariants'
+// trailing "**" would sit straight after the form's own literal ":",
+// with no "/" in front of it to give it cross slash meaning, so it would
+// match a single path segment only and never a real "owner/repo" remote.
+// "*/**" matches that owner segment, whatever it is, then crosses every
+// slash after it, a GitLab style "group/subgroup/repo" path included.
+// Every other tier already has a "/" immediately before its own "**",
+// from the owner segment or, for Azure DevOps, the literal "v3" prefix,
+// so sshRepoPathVariants' path is already correct there.
+func scpRepoPathVariants(owner, repo string, azure bool) []string {
+	if !azure && owner == "" && repo == "" {
+		return []string{"*/**"}
+	}
+	return sshRepoPathVariants(owner, repo, azure)
+}
+
+// sshRepoPathVariants returns the path segment, after "host:" or
+// "host/", the scp style and "ssh://" forms carry for owner and repo.
+// Azure DevOps's SSH path adds the literal "v3" prefix and, once a repo is
+// pinned, a wildcard where its project segment sits, which the SSH path
+// never omits and a rule never pins; it carries no ".git" suffix, unlike
+// every other host.
+func sshRepoPathVariants(owner, repo string, azure bool) []string {
+	if !azure {
+		return repoPathVariants(owner, repo)
+	}
+	switch {
+	case repo != "":
+		return []string{"v3/" + owner + "/*/" + repo}
+	case owner != "":
+		return []string{"v3/" + owner + "/**"}
+	default:
+		return []string{"v3/**"}
+	}
+}
+
+// httpsRepoPathVariants is sshRepoPathVariants for the HTTPS path, which
+// carries no "v3" prefix but does carry the literal "_git" segment right
+// before the repository, once a repo is pinned.
+func httpsRepoPathVariants(owner, repo string, azure bool) []string {
+	if !azure {
+		return repoPathVariants(owner, repo)
+	}
+	switch {
+	case repo != "":
+		return []string{owner + "/*/_git/" + repo}
+	case owner != "":
+		return []string{owner + "/**"}
+	default:
+		return []string{"**"}
+	}
+}
+
+// repoPathVariants is the non Azure DevOps path shape shared by the scp
+// style, "ssh://" and HTTPS forms.
 func repoPathVariants(owner, repo string) []string {
 	switch {
 	case repo != "":

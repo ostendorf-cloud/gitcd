@@ -43,12 +43,15 @@ func testConfig() config.Config {
 			},
 		},
 		Rules: []config.Rule{
-			// Deliberately listed least specific first, most specific
-			// last, the opposite of emit order, so the golden file also
-			// proves emit order does not follow configuration order.
-			{Host: "github.com", Profile: "private"},
-			{Host: "github.com", Owner: "ostendorf-cloud", Repo: "secrets", Profile: "locked-down"},
+			// Deliberately listed most specific first, least specific
+			// (general) last, the opposite of emit order: a renderer that
+			// forgot to sort by specificity and fell back to this, the
+			// configuration file's own order, would emit the general
+			// github.com block after the specific one, and TestRender_
+			// SpecificityOrder below is written to catch exactly that.
 			{Host: "dev.azure.com", Profile: "ado"},
+			{Host: "github.com", Owner: "ostendorf-cloud", Repo: "secrets", Profile: "locked-down"},
+			{Host: "github.com", Profile: "private"},
 		},
 		DefaultProfile: "private",
 	}
@@ -95,11 +98,14 @@ func TestRender(t *testing.T) {
 func TestRender_SpecificityOrder(t *testing.T) {
 	// Acceptance: a general rule listed last in the configuration file
 	// must not override a more specific one listed earlier. The config
-	// under test lists the host only rule for github.com first and the
-	// host, owner and repo rule last; the rendered include file must
+	// under test lists the host, owner and repo rule for github.com
+	// first and the host only rule last; the rendered include file must
 	// still carry the specific rule's includeIf block after the general
 	// one, since includeIf block order, not configuration order, decides
-	// which wins.
+	// which wins. With the fixture in this order, a renderer that forgot
+	// to sort by specificity and emitted blocks in configuration order
+	// instead would place the general block after the specific one,
+	// which the assertion below catches.
 	cfg := testConfig()
 	rendered, err := gitconfig.Render(cfg, "/home/simon")
 	if err != nil {
@@ -111,7 +117,7 @@ func TestRender_SpecificityOrder(t *testing.T) {
 		t.Fatalf("Render() include file never references the locked-down profile:\n%s", includes)
 	}
 
-	hostOnlyBlock := strings.Index(includes, "git@github.com:**")
+	hostOnlyBlock := strings.Index(includes, "git@github.com:*/**")
 	repoBlock := strings.Index(includes, "ostendorf-cloud/secrets")
 	if hostOnlyBlock == -1 {
 		t.Fatalf("Render() include file has no host only block for github.com:\n%s", includes)
@@ -178,34 +184,87 @@ func TestRender_HasconfigFormsPerRule(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		rule  config.Rule
-		wants []string
+		name    string
+		hosts   map[string]config.Host
+		rule    config.Rule
+		wants   []string
+		forbids []string
 	}{
 		{
-			name: "a host only rule matches every owner and repo under it, both URL forms",
+			// The scp form's glob needs "*/**", not a bare "**": verified
+			// directly against git, a bare "**" sitting right after the
+			// literal ":", with no "/" in front of it, matches only a
+			// single path segment and never a real "owner/repo" remote.
+			// TestRunApply_HostOnlyRuleMatchesAnScpOwnerRepoRemote in
+			// cmd/gitcd proves this against git itself, not only as text.
+			name: "a host only rule matches every owner and repo under it, every URL form",
 			rule: config.Rule{Host: "github.com", Profile: "private"},
 			wants: []string{
-				`hasconfig:remote.*.url:git@github.com:**`,
+				`hasconfig:remote.*.url:git@github.com:*/**`,
+				`hasconfig:remote.*.url:ssh://git@github.com/**`,
 				`hasconfig:remote.*.url:https://github.com/**`,
+				`hasconfig:remote.*.url:https://*@github.com/**`,
 			},
 		},
 		{
-			name: "a host and owner rule matches every repo under that owner, both URL forms",
+			name: "a host and owner rule matches every repo under that owner, every URL form",
 			rule: config.Rule{Host: "github.com", Owner: "ostendorf-cloud", Profile: "private"},
 			wants: []string{
 				`hasconfig:remote.*.url:git@github.com:ostendorf-cloud/**`,
+				`hasconfig:remote.*.url:ssh://git@github.com/ostendorf-cloud/**`,
 				`hasconfig:remote.*.url:https://github.com/ostendorf-cloud/**`,
+				`hasconfig:remote.*.url:https://*@github.com/ostendorf-cloud/**`,
 			},
 		},
 		{
-			name: "a host, owner and repo rule matches that repository literally, with and without .git",
+			name: "a host, owner and repo rule matches that repository literally, with and without .git, every URL form",
 			rule: config.Rule{Host: "github.com", Owner: "ostendorf-cloud", Repo: "gitcd", Profile: "private"},
 			wants: []string{
 				`hasconfig:remote.*.url:git@github.com:ostendorf-cloud/gitcd"`,
 				`hasconfig:remote.*.url:git@github.com:ostendorf-cloud/gitcd.git"`,
+				`hasconfig:remote.*.url:ssh://git@github.com/ostendorf-cloud/gitcd"`,
+				`hasconfig:remote.*.url:ssh://git@github.com/ostendorf-cloud/gitcd.git"`,
 				`hasconfig:remote.*.url:https://github.com/ostendorf-cloud/gitcd"`,
 				`hasconfig:remote.*.url:https://github.com/ostendorf-cloud/gitcd.git"`,
+				`hasconfig:remote.*.url:https://*@github.com/ostendorf-cloud/gitcd"`,
+				`hasconfig:remote.*.url:https://*@github.com/ostendorf-cloud/gitcd.git"`,
+			},
+		},
+		{
+			// A second account on the same forge is reached through an
+			// SSH host alias, bound to a distinct key: the scenario
+			// gitcd exists for. A rule naming the canonical host must
+			// still catch a remote stored under the alias, or the
+			// profile it expects silently never applies.
+			name:  "a host with a configured SSH alias emits every form for the alias too",
+			hosts: map[string]config.Host{"github.com": {Aliases: []string{"gh-work"}}},
+			rule:  config.Rule{Host: "github.com", Owner: "acme-corp", Repo: "widget", Profile: "private"},
+			wants: []string{
+				`hasconfig:remote.*.url:git@gh-work:acme-corp/widget"`,
+				`hasconfig:remote.*.url:git@gh-work:acme-corp/widget.git"`,
+				`hasconfig:remote.*.url:ssh://git@gh-work/acme-corp/widget"`,
+				`hasconfig:remote.*.url:https://gh-work/acme-corp/widget"`,
+				`hasconfig:remote.*.url:https://*@gh-work/acme-corp/widget"`,
+				// The canonical host's own blocks must still be there too.
+				`hasconfig:remote.*.url:git@github.com:acme-corp/widget"`,
+			},
+		},
+		{
+			// Azure DevOps carries a project segment a rule cannot pin,
+			// in a different place for each protocol, and offers no
+			// "ssh://" URL at all, only the scp form.
+			name:  "an Azure DevOps rule wildcards the project segment and skips the ssh:// form",
+			hosts: map[string]config.Host{"dev.azure.com": {Aliases: []string{"ssh.dev.azure.com"}}},
+			rule:  config.Rule{Host: "dev.azure.com", Owner: "myorg", Repo: "myrepo", Profile: "private"},
+			wants: []string{
+				`hasconfig:remote.*.url:git@dev.azure.com:v3/myorg/*/myrepo"`,
+				`hasconfig:remote.*.url:git@ssh.dev.azure.com:v3/myorg/*/myrepo"`,
+				`hasconfig:remote.*.url:https://dev.azure.com/myorg/*/_git/myrepo"`,
+				`hasconfig:remote.*.url:https://*@dev.azure.com/myorg/*/_git/myrepo"`,
+			},
+			forbids: []string{
+				`hasconfig:remote.*.url:ssh://git@dev.azure.com`,
+				`hasconfig:remote.*.url:ssh://git@ssh.dev.azure.com`,
 			},
 		},
 	}
@@ -215,6 +274,7 @@ func TestRender_HasconfigFormsPerRule(t *testing.T) {
 			cfg := config.Config{
 				Root:     "/home/simon/Code",
 				Default:  "{host}/{owner}/{repo}",
+				Hosts:    tt.hosts,
 				Profiles: map[string]config.Profile{"private": {"user.email": "simon@example.test"}},
 				Rules:    []config.Rule{tt.rule},
 			}
@@ -226,6 +286,11 @@ func TestRender_HasconfigFormsPerRule(t *testing.T) {
 			for _, want := range tt.wants {
 				if !strings.Contains(includes, want) {
 					t.Fatalf("Render() include file is missing %q:\n%s", want, includes)
+				}
+			}
+			for _, forbid := range tt.forbids {
+				if strings.Contains(includes, forbid) {
+					t.Fatalf("Render() include file has %q, want it absent:\n%s", forbid, includes)
 				}
 			}
 		})

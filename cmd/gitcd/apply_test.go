@@ -75,6 +75,52 @@ defaultProfile: private
 	}
 }
 
+// TestRunApply_HostOnlyRuleMatchesAnScpOwnerRepoRemote guards against a
+// host only rule's scp style "hasconfig" glob matching only a single path
+// segment: git's own wildmatch only treats "**" as crossing a "/" when a
+// "/" sits right in front of it, and the scp form's host only tier has a
+// bare "**" straight after the literal ":", with no "/" there. Proven
+// here through "git config", the same way the defect itself was found,
+// against a repository placed outside the layout root so only the
+// "hasconfig" block, never the "gitdir/i" one, can be the one matching.
+func TestRunApply_HostOnlyRuleMatchesAnScpOwnerRepoRemote(t *testing.T) {
+	home := setupEnv(t)
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+profiles:
+  private:
+    user.email: simon@private.example.test
+  work:
+    user.email: simon@work.example.test
+
+rules:
+  - host: github.com
+    profile: work
+
+defaultProfile: private
+`)
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"init"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("init = %d, want 0, stderr: %s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"apply"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("apply = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	repo := filepath.Join(home, "elsewhere", "thing")
+	initRepository(t, repo)
+	runGit(t, repo, "remote", "add", "origin", "git@github.com:someone/thing.git")
+
+	if got := runGitOutput(t, repo, "config", "--get", "user.email"); got != "simon@work.example.test" {
+		t.Fatalf(
+			"user.email for an scp remote under a host only rule = %q, want %q (the host only hasconfig block never matched)",
+			got, "simon@work.example.test",
+		)
+	}
+}
+
 func TestRunApply_NoProfilesStillWritesAnEmptyIncludeFile(t *testing.T) {
 	home := setupEnv(t)
 
