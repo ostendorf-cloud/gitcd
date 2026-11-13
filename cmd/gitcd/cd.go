@@ -179,7 +179,12 @@ func pick(query string, candidates []cdCandidate, stdin io.Reader, isTerminal bo
 	fmt.Fprintf(stderr, "pick one [1-%d]: ", len(candidates))
 	scanner := bufio.NewScanner(stdin)
 	if !scanner.Scan() {
-		return cdCandidate{}, fmt.Errorf("no selection was read for %q", query)
+		// isTerminal came from isTerminalFile, which cannot tell a real
+		// terminal that produced no input from a character device such
+		// as /dev/null or /dev/zero that was never a terminal at all: an
+		// empty read here honestly could be either, so the message
+		// names both rather than asserting the one isTerminal claimed.
+		return cdCandidate{}, fmt.Errorf("no selection was read for %q: stdin produced no input, which also happens when it is not actually an interactive terminal", query)
 	}
 	choice := strings.TrimSpace(scanner.Text())
 	idx, err := strconv.Atoi(choice)
@@ -189,10 +194,14 @@ func pick(query string, candidates []cdCandidate, stdin io.Reader, isTerminal bo
 	return candidates[idx-1], nil
 }
 
-// isTerminalFile reports whether f is connected to a terminal: a character
-// device rather than a pipe, a redirected file or /dev/null. It is the
-// standard library only way to detect this, avoiding a dependency on
-// golang.org/x/term for the one bit "cd" needs from it.
+// isTerminalFile reports whether f is likely connected to an interactive
+// terminal, tested as a character device rather than a pipe or a
+// redirected regular file. It is the standard library only way to detect
+// this, avoiding a dependency on golang.org/x/term for the one bit "cd"
+// needs from it. The test is not exact: /dev/null and /dev/zero are
+// themselves character devices, so a script that redirects stdin from
+// either is misread as a terminal. pick's own failure message stays
+// honest about that rather than claiming stdin definitely is not one.
 func isTerminalFile(f *os.File) bool {
 	info, err := f.Stat()
 	if err != nil {

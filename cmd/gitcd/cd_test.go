@@ -156,6 +156,43 @@ func TestRunCd_AmbiguousQueryWithATerminalReadsAPickFromStdin(t *testing.T) {
 	}
 }
 
+// TestRunCd_AmbiguousQueryWithATerminalButNoInputFailsWithAnHonestMessage
+// covers the case isTerminalFile cannot tell apart: stdin redirected from
+// /dev/null or /dev/zero is a character device, so isTerminalFile = true
+// is correct by its own test, but it is not an interactive terminal, so no
+// selection is ever read. Before the fix, the failure claimed "no
+// selection was read" as if a real terminal had simply been given nothing,
+// which is not what happened here: stdin never was a terminal to begin
+// with. The message must say so is possible instead of asserting the
+// wrong certainty.
+func TestRunCd_AmbiguousQueryWithATerminalButNoInputFailsWithAnHonestMessage(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+
+	first := filepath.Join(root, "github.com", "acme", "widget")
+	second := filepath.Join(root, "gitlab.com", "acme", "widget")
+	initRepository(t, first)
+	addRemote(t, first, "https://github.com/acme/widget.git")
+	initRepository(t, second)
+	addRemote(t, second, "https://gitlab.com/acme/widget.git")
+
+	var stdout, stderr bytes.Buffer
+	// isTerminal is forced true, as isTerminalFile would wrongly report
+	// for /dev/null or /dev/zero, while stdin itself carries no input at
+	// all, exactly what reading from either of those produces.
+	code := runCd([]string{"widget"}, strings.NewReader(""), true, &stdout, &stderr)
+
+	if code == 0 {
+		t.Fatal("cd widget = 0, want a failure when no selection can be read")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("cd widget wrote to stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "not actually an interactive terminal") {
+		t.Fatalf("cd widget stderr = %q, want it to admit stdin may not actually be a terminal rather than assuming it is one", stderr.String())
+	}
+}
+
 func TestRunCd_InvalidPickFails(t *testing.T) {
 	home := setupEnv(t)
 	root := filepath.Join(home, "Code")
