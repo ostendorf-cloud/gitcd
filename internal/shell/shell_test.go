@@ -112,3 +112,74 @@ func TestBashAndZshSnippetsAreSyntacticallyValid(t *testing.T) {
 		}
 	}
 }
+
+// TestZsh_CdCompletionOffersEveryRepositoryByItsShortName runs the real
+// zsh completion function the Zsh snippet defines, with "compadd" and
+// "compdef" stubbed out since neither is available outside a terminal
+// completion session, and a fake "gitcd" on PATH standing in for the real
+// binary "gitcd list --worktrees" shells out to. It is a behavioural test,
+// not a string match: it would still pass if the function's body were
+// replaced by anything else that called compadd with the right names, and
+// would fail if "_gitcd" stopped reducing each path to its final segment,
+// or stopped going through "gitcd list --worktrees" at all.
+func TestZsh_CdCompletionOffersEveryRepositoryByItsShortName(t *testing.T) {
+	t.Parallel()
+
+	zshPath, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh is not installed")
+	}
+
+	dir := t.TempDir()
+	snippetFile := filepath.Join(dir, "init.zsh")
+	if err := os.WriteFile(snippetFile, []byte(shell.Zsh()), 0o644); err != nil {
+		t.Fatalf("write %s: %v", snippetFile, err)
+	}
+
+	fakeBin := t.TempDir()
+	fakeGitcd := filepath.Join(fakeBin, "gitcd")
+	fakeScript := "#!/bin/sh\n" +
+		"if [ \"$1\" = list ] && [ \"$2\" = --worktrees ]; then\n" +
+		"  printf '%s\\n' /code/github.com/acme/widget /code/gitlab.com/acme/other\n" +
+		"fi\n"
+	if err := os.WriteFile(fakeGitcd, []byte(fakeScript), 0o755); err != nil {
+		t.Fatalf("write %s: %v", fakeGitcd, err)
+	}
+
+	script := `compdef() { :; }
+compadd() { for a in "$@"; do [ "$a" = "--" ] && continue; print -r -- "$a"; done }
+source "$1"
+words=(gitcd cd)
+_gitcd
+`
+	cmd := exec.CommandContext(context.Background(), zshPath, "-c", script, "--", snippetFile)
+	cmd.Env = append(os.Environ(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run the zsh completion function: %v: %s", err, out)
+	}
+
+	got := strings.Fields(strings.TrimSpace(string(out)))
+	want := []string{"widget", "other"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("_gitcd compadd arguments = %v, want %v", got, want)
+	}
+}
+
+// TestFish_RegistersCdCompletion checks the fish completion block by
+// string match only: fish is not installed in this environment and is not
+// in the mise tool registry, so no real fish process can execute it.
+func TestFish_RegistersCdCompletion(t *testing.T) {
+	t.Parallel()
+
+	snippet := shell.Fish()
+	for _, want := range []string{
+		"complete -c gitcd",
+		"__fish_seen_subcommand_from cd",
+		"gitcd list --worktrees",
+	} {
+		if !strings.Contains(snippet, want) {
+			t.Fatalf("fish snippet does not contain %q: %s", want, snippet)
+		}
+	}
+}
