@@ -5,12 +5,83 @@ jump to any of them from the shell.
 
 ## What it does
 
-- Clones `github.com/owner/repo` to `~/Code/github.com/owner/repo`, with the layout configurable
-  per host.
-- Applies `user.name`, `user.email` and the signing key from a profile matched on the remote, so
-  work and private identities never have to be switched by hand.
-- Resolves a partial repository name to a path, which a shell function turns into a `cd`.
+- Clones a remote into a path rendered from a template, `~/Code/github.com/owner/repo` by
+  default, with the template configurable per host.
+- Resolves a partial repository name, or a `host/owner/repo` shorthand, to its path, which a
+  shell function turns into a `cd`.
+- Accepts an SSH URL, an HTTPS URL, the scp style `git@host:owner/repo.git`, the Azure DevOps
+  `_git` form, and the bare `host/owner/repo` shorthand, resolving a configured host alias to
+  its canonical host either way.
 
-## Status
+Applying a git identity profile per remote is a later milestone, tracked as an issue; this
+version clones and navigates only.
 
-In development. The milestones are tracked as issues.
+## Install
+
+```sh
+task setup
+task build
+```
+
+Builds `bin/gitcd` from source. A packaged release is not cut yet; see the repository's issues
+for where that stands.
+
+## Use
+
+```sh
+gitcd clone github.com/acme/widget         # clone into ~/Code/github.com/acme/widget
+gitcd clone git@github.com:acme/widget.git # equally, from any accepted remote form
+gitcd path widget                          # the path of a repository cloned by its exact name
+gitcd path github.com/acme/widget          # the path of a repository cloned under this host
+eval "$(gitcd shell-init zsh)"             # wrap the binary so clone and path change directory
+gitcd version
+```
+
+Every command prints its result on stdout and everything else, including every log line, on
+stderr; `--verbose` enables debug logging and `--dry-run` previews a command that writes
+without doing it. `clone` is idempotent: a target that already exists with the same remote
+prints its path and exits 0, and one that exists with a different remote fails, naming both.
+
+## Configuration
+
+`~/.gitcd.yaml`, or `$XDG_CONFIG_HOME/gitcd/config.yaml` when that file does not exist.
+
+```yaml
+root: ~/Code
+
+layout:
+  default: "{host}/{owner}/{repo}"
+
+hosts:
+  dev.azure.com:
+    layout: "{host}/{org}/{project}/{repo}"
+    aliases: [ssh.dev.azure.com, vs-ssh.visualstudio.com]
+  github.com:
+    aliases: [github-work, github-private]
+    protocol: ssh
+```
+
+| Key | Purpose | Default | Required |
+| --- | --- | --- | --- |
+| `root` | Directory every repository is cloned under. | `~/Code` | No |
+| `layout.default` | Path template applied to a host without its own. | `{host}/{owner}/{repo}` | No |
+| `hosts.<host>.layout` | This host's own path template. | `layout.default` | No |
+| `hosts.<host>.aliases` | Further host names, an SSH host alias included, that resolve to this host. | none | No |
+| `hosts.<host>.protocol` | Protocol `clone` builds for a `host/owner/repo` shorthand: `ssh` or `https`. | `https` | No |
+
+A template is built from `{host}`, `{owner}` (`{org}` reads the same field, for an Azure DevOps
+template), `{project}` and `{repo}`. An unknown key anywhere in the file is rejected.
+
+## Development
+
+```sh
+task setup
+task --list
+task check
+```
+
+One target per check, one CI job per target. `check` only calls the small targets.
+
+## License
+
+Apache-2.0. See `LICENSE`.
