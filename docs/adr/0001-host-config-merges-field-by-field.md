@@ -1,6 +1,6 @@
 # 1. A host config entry merges field by field onto its default
 
-Status: proposed
+Status: accepted
 
 ## Context
 
