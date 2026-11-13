@@ -7,15 +7,21 @@ not repeated here.
 ## Layout
 
 - `cmd/gitcd/`: the entry point, flags and command dispatch only.
-- `internal/config/`: loads `~/.gitcd.yaml` or its XDG fallback, unknown keys rejected.
+- `internal/config/`: loads `~/.gitcd.yaml` or its XDG fallback, unknown keys rejected; also the
+  identity profiles, rules and default profile the file carries.
 - `internal/remote/`: parses a git remote into host, owner, project and repository, host
   aliases resolved.
 - `internal/layout/`: renders a path template against a remote and maps a path back to one.
-- `internal/git/`: the git CLI wrapper: clone, and reading back a clone's own remote.
+- `internal/git/`: the git CLI wrapper: clone, reading back a clone's own remote, and every
+  identity related git config read and write.
+- `internal/profile/`: resolves a remote to the profile its rules expect, and inspects a
+  repository on disk for the profile it actually carries.
+- `internal/gitconfig/`: renders the profile files and the include file `apply` writes; it
+  never writes a file itself.
 - `internal/shell/`: the per shell init snippet `shell-init` prints.
 
-Profiles, identity, `list`, `cd`, `doctor`, `adopt`, `status` and `sync` are later milestones,
-tracked as issues; their own packages land with them.
+`list`, `cd`, `doctor`, `adopt`, `status` and `sync` are later milestones, tracked as issues;
+their own packages land with them.
 
 ## Commands
 
