@@ -4,8 +4,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 
 	"gopkg.in/yaml.v3"
@@ -47,11 +49,26 @@ func AddProfileKeys(existing []byte, name string, keys map[string]string) ([]byt
 	return out, nil
 }
 
-// parseOrEmptyDocument parses existing as a YAML document node, or
+// ErrMultipleDocuments is wrapped into the error AddProfileKeys returns
+// when the existing configuration holds more than one YAML document:
+// gopkg.in/yaml.v3 decodes and re-encodes only the first one, which would
+// silently drop every document after it from the file this command
+// rewrites.
+var ErrMultipleDocuments = errors.New("config: the existing configuration holds more than one YAML document")
+
+// parseOrEmptyDocument parses existing as a single YAML document node, or
 // returns a fresh document holding an empty mapping when existing is
 // empty: a configuration file that does not exist yet, or exists but is
 // blank, is not a parse error, matching LoadFrom's own treatment of a
 // missing file.
+//
+// existing holding more than one YAML document is refused with
+// ErrMultipleDocuments rather than edited: this package's own
+// yaml.v3.Node round trip, like config.LoadFrom, only ever sees the
+// first document, so silently writing back just that one would discard
+// every document after it with nothing printed to say so. A person who
+// deliberately split the file this way is expected to combine it into
+// one document by hand before running a command that edits it.
 func parseOrEmptyDocument(existing []byte) (*yaml.Node, error) {
 	if len(existing) == 0 {
 		return &yaml.Node{
@@ -60,10 +77,17 @@ func parseOrEmptyDocument(existing []byte) (*yaml.Node, error) {
 		}, nil
 	}
 
+	dec := yaml.NewDecoder(bytes.NewReader(existing))
+
 	var doc yaml.Node
-	if err := yaml.Unmarshal(existing, &doc); err != nil {
+	if err := dec.Decode(&doc); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("config: parse the existing configuration: %w", err)
 	}
+
+	if err := nextDocumentExists(dec); err != nil {
+		return nil, err
+	}
+
 	if doc.Kind == 0 || len(doc.Content) == 0 {
 		// A document holding only comments, or nothing at all, decodes
 		// into a node with no content: the same empty case as a missing
@@ -75,6 +99,39 @@ func parseOrEmptyDocument(existing []byte) (*yaml.Node, error) {
 		}, nil
 	}
 	return &doc, nil
+}
+
+// nextDocumentExists reports, as ErrMultipleDocuments, whether dec still
+// holds a second YAML document after the one parseOrEmptyDocument already
+// decoded. A trailing, empty document, the shape a lone "---" end marker
+// with nothing meaningful after it decodes to, is not treated as a real
+// second document: only one that itself carries content counts.
+func nextDocumentExists(dec *yaml.Decoder) error {
+	var next yaml.Node
+	err := dec.Decode(&next)
+	switch {
+	case errors.Is(err, io.EOF):
+		return nil
+	case err != nil:
+		return fmt.Errorf("config: parse the existing configuration: %w", err)
+	case isEmptyDocument(&next):
+		return nil
+	default:
+		return ErrMultipleDocuments
+	}
+}
+
+// isEmptyDocument reports whether doc, a yaml.Node decoded as a whole
+// document, carries no real content: either no document node at all, or
+// a document node wrapping nothing but an implicit "!!null" scalar, the
+// shape a bare "---" document separator with nothing meaningful after it
+// decodes to.
+func isEmptyDocument(doc *yaml.Node) bool {
+	if doc.Kind == 0 || len(doc.Content) == 0 {
+		return true
+	}
+	content := doc.Content[0]
+	return content.Kind == yaml.ScalarNode && content.Tag == "!!null"
 }
 
 // errNotFound is returned internally by mappingLookup when key is not

@@ -18,15 +18,19 @@ import (
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/git"
 	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
+	"gopkg.in/yaml.v3"
 )
 
 // defaultMovedProfileName is the profile "init" moves a global identity
-// key into when "--profile" does not say otherwise. It is always a
-// dedicated profile, never an existing one chosen by guesswork: merging
+// key into when "--profile" does not say otherwise. targetProfileConflict
+// enforces that the chosen name, this default or an explicit "--profile",
+// is always a dedicated profile, never an existing one chosen by
+// guesswork, and never the profile defaultProfile already names: merging
 // into whichever profile happens to already exist would silently
 // overwrite a key that profile set on purpose, the moment it happened to
-// share a name with one of IdentityKeys. A fresh, dedicated profile is
-// never ambiguous and is always safe to merge into again on a later run.
+// share a name with one of IdentityKeys, and landing in defaultProfile
+// would make the leaked identity the default identity again, every
+// unmatched repository's own, exactly the bug this move exists to fix.
 const defaultMovedProfileName = "global"
 
 // runInit implements "gitcd init". Beyond adding the "include.path" line
@@ -115,7 +119,7 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		backupPath = globalPath + ".gitcd-backup-" + time.Now().UTC().Format("20060102T150405Z")
 		if err := os.WriteFile(backupPath, content, 0o600); err != nil {
 			backupPath = ""
-			return fmt.Errorf("gitcd init: back up %s: %w", globalPath, err)
+			return fmt.Errorf("back up %s: %w", globalPath, err)
 		}
 		logger.Debug("backed up the global git configuration file", "path", backupPath)
 		fmt.Fprintf(stdout, "backed up %s to %s\n", globalPath, backupPath)
@@ -126,6 +130,22 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		reportGlobalIdentityKeys(stdout, globalPath, found, target)
 
 		move := decideMove(*moveIdentity, stdin, stderr, found, target)
+		if move {
+			cfgPath, err := config.Path()
+			if err != nil {
+				fmt.Fprintf(stderr, "gitcd init: %v\n", err)
+				return 1
+			}
+			conflict, err := targetProfileConflict(cfgPath, target)
+			if err != nil {
+				fmt.Fprintf(stderr, "gitcd init: %v\n", err)
+				return 1
+			}
+			if conflict != "" {
+				fmt.Fprintf(stderr, "gitcd init: %s\n", conflict)
+				return 1
+			}
+		}
 		switch {
 		case !move:
 			fmt.Fprintln(stdout, "not moving them: pass --move-identity=yes to move them without a prompt, or --move-identity=ask to be asked")
@@ -220,6 +240,68 @@ func describeIdentityKeys(found []git.GlobalIdentityValue) string {
 	return strings.Join(names, ", ")
 }
 
+// targetProfileConflict reports, as a message ready to print, why "init"
+// must refuse to move an identity key into profile target, or "" when
+// target is clear to use. It reads cfgPath itself, with its own, lenient
+// parse into only the two fields this check needs, rather than going
+// through config.LoadFrom: this is purely a name collision check, which
+// must not block on some unrelated problem the rest of the file carries,
+// a problem moveGlobalIdentity's own, stricter validation is already
+// responsible for catching once there is something to write.
+//
+// Two collisions are refused, matching pull request 12's review:
+//   - target already names defaultProfile. Never allowed, with no
+//     override: the found keys are, by definition, a leaked identity that
+//     "useConfigOnly" could not suppress; landing them in defaultProfile
+//     would make that same leaked identity the default for every
+//     repository no rule matches, again, the exact bug this move exists
+//     to fix, just rearmed in a broader form.
+//   - target already names an existing profile. Never allowed either,
+//     with no override flag: AddProfileKeys overwrites a key by name, so
+//     merging into a profile that already exists would silently replace
+//     a value chosen on purpose the moment it happened to share a key
+//     name with one of git.IdentityKeys. A dedicated profile costs
+//     nothing to create under a name nothing else uses yet, so there is
+//     no legitimate reason to merge instead, and the refusal names the
+//     conflict so the user can rerun with a different "--profile".
+func targetProfileConflict(cfgPath, target string) (string, error) {
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read %s: %w", cfgPath, err)
+	}
+
+	var doc struct {
+		Profiles       map[string]map[string]any `yaml:"profiles"`
+		DefaultProfile string                    `yaml:"defaultProfile"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		// A file this lenient a parse cannot even make sense of is left
+		// for moveGlobalIdentity's own, stricter validation to reject
+		// with a precise error once there is something to write.
+		return "", nil
+	}
+
+	if doc.DefaultProfile != "" && doc.DefaultProfile == target {
+		return fmt.Sprintf(
+			"profile %q is the defaultProfile in %s: moving the leaked identity there would make every repository no rule\n"+
+				"matches inherit it again, the exact bug this move exists to fix\n"+
+				"choose a different name with --profile, or clear defaultProfile first and run \"gitcd apply\" again",
+			target, cfgPath,
+		), nil
+	}
+	if _, ok := doc.Profiles[target]; ok {
+		return fmt.Sprintf(
+			"profile %q already exists in %s: moving into it could silently overwrite a value chosen on purpose\n"+
+				"choose a different, not yet used name with --profile",
+			target, cfgPath,
+		), nil
+	}
+	return "", nil
+}
+
 // decideMove reports whether found should be moved, given moveIdentity,
 // the "--move-identity" flag's value: "yes" moves without asking, "no"
 // and the unset default never move and never read stdin, and "ask" prompts
@@ -243,29 +325,30 @@ func decideMove(moveIdentity string, stdin io.Reader, stderr io.Writer, found []
 
 // moveGlobalIdentity moves found into profile target: it writes the
 // updated profile into the configuration file config.Path resolves,
-// backing it up first when it already exists, before removing each key
-// from the global git configuration, backing that up through
-// backupGlobalConfig first. Persisting the new copy before touching the
-// original is deliberate: if the persist step fails, the global
-// configuration is never touched at all, and if a later removal fails
-// partway through, every value is already safely recorded in the
+// backing it up first when it already exists, validates that the
+// updated file actually loads, before removing each key from the global
+// git configuration, backing that up through backupGlobalConfig first.
+// Persisting the new copy before touching the original is deliberate: if
+// the persist step fails, or the persisted copy does not load, the
+// global configuration is never touched at all, and if a later removal
+// fails partway through, every value is already safely recorded in the
 // profile, not lost.
 func moveGlobalIdentity(
 	ctx context.Context, found []git.GlobalIdentityValue, target, globalPath string, backupGlobalConfig func() error, stdout io.Writer,
 ) error {
 	cfgPath, err := config.Path()
 	if err != nil {
-		return fmt.Errorf("gitcd init: %w", err)
+		return err
 	}
 
 	existingYAML, err := os.ReadFile(cfgPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("gitcd init: read %s: %w", cfgPath, err)
+		return fmt.Errorf("read %s: %w", cfgPath, err)
 	}
 	if len(existingYAML) > 0 {
 		cfgBackupPath := cfgPath + ".gitcd-backup-" + time.Now().UTC().Format("20060102T150405Z")
 		if err := os.WriteFile(cfgBackupPath, existingYAML, 0o600); err != nil {
-			return fmt.Errorf("gitcd init: back up %s: %w", cfgPath, err)
+			return fmt.Errorf("back up %s: %w", cfgPath, err)
 		}
 		fmt.Fprintf(stdout, "backed up %s to %s\n", cfgPath, cfgBackupPath)
 	}
@@ -276,13 +359,32 @@ func moveGlobalIdentity(
 	}
 	updatedYAML, err := config.AddProfileKeys(existingYAML, target, keys)
 	if err != nil {
-		return fmt.Errorf("gitcd init: %w", err)
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
-		return fmt.Errorf("gitcd init: create %s: %w", filepath.Dir(cfgPath), err)
+		return fmt.Errorf("create %s: %w", filepath.Dir(cfgPath), err)
 	}
-	if err := os.WriteFile(cfgPath, updatedYAML, 0o644); err != nil {
-		return fmt.Errorf("gitcd init: write %s: %w", cfgPath, err)
+
+	// Written to a temporary file first and validated with config.LoadFrom
+	// before it ever reaches cfgPath: writing an updated configuration
+	// that then fails to load, for instance because the file already
+	// carried an unknown key, must never reach the point of removing the
+	// identity from the global git configuration below, the comment on
+	// this function's own name already argues for persisting before
+	// destroying, and persisting something unreadable does not satisfy
+	// that argument. Validating against a temporary file, rather than
+	// cfgPath itself, means a failure here leaves cfgPath exactly as it
+	// was, with nothing left to restore.
+	tmpPath := cfgPath + ".gitcd-validate-tmp"
+	if err := os.WriteFile(tmpPath, updatedYAML, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", tmpPath, err)
+	}
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := config.LoadFrom(tmpPath); err != nil {
+		return fmt.Errorf("the updated configuration would not load, aborting before touching %s: %w", globalPath, err)
+	}
+	if err := os.Rename(tmpPath, cfgPath); err != nil {
+		return fmt.Errorf("write %s: %w", cfgPath, err)
 	}
 	fmt.Fprintf(stdout, "moved %s into profile %q in %s\n", describeIdentityKeys(found), target, cfgPath)
 
@@ -291,7 +393,7 @@ func moveGlobalIdentity(
 	}
 	for _, v := range found {
 		if err := git.ConfigUnsetGlobal(ctx, v.Key); err != nil {
-			return fmt.Errorf("gitcd init: remove %s from %s: %w", v.Key, globalPath, err)
+			return fmt.Errorf("remove %s from %s: %w", v.Key, globalPath, err)
 		}
 	}
 	fmt.Fprintf(stdout, "removed %s from %s\n", describeIdentityKeys(found), globalPath)

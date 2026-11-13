@@ -451,6 +451,147 @@ func runGitShowOriginAllowFailure(t *testing.T, dir, key string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// TestRunInit_RefusesToTargetADeliberateProfileThatIsAlsoTheDefault is
+// the exact reproduction pull request 12's review returned as a blocker:
+// a profile that already carries deliberate values and is also
+// defaultProfile, named explicitly with "--profile". Moving the leaked
+// global identity there would both overwrite the deliberate values and
+// make the leaked identity the default for every repository no rule
+// matches, re-arming the bug this command exists to fix in a broader
+// form. "init" must refuse instead, and must not change the file.
+func TestRunInit_RefusesToTargetADeliberateProfileThatIsAlsoTheDefault(t *testing.T) {
+	home := setupEnv(t)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	writeFile(t, cfgPath, `
+profiles:
+  everyday:
+    user.name: Deliberate Name
+    user.email: deliberate@example.com
+defaultProfile: everyday
+`)
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", cfgPath, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runInit([]string{"--move-identity=yes", "--profile=everyday"}, strings.NewReader(""), &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("init --move-identity=yes --profile=everyday = 0, want a refusal when the target is the defaultProfile, stdout: %s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "defaultProfile") {
+		t.Fatalf("init stderr = %q, want it to name the defaultProfile conflict", stderr.String())
+	}
+
+	after, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", cfgPath, err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("init changed %s despite refusing:\nbefore: %q\nafter:  %q", cfgPath, before, after)
+	}
+
+	globalAfter, err := os.ReadFile(globalConfigPath(home))
+	if err != nil {
+		t.Fatalf("read global config: %v", err)
+	}
+	if !strings.Contains(string(globalAfter), "Test User") || !strings.Contains(string(globalAfter), "[email protected]") {
+		t.Fatalf("init removed the global identity despite refusing the move: %q", globalAfter)
+	}
+}
+
+// TestRunInit_RefusesToOverwriteAPreExistingProfileNamedGlobal covers the
+// review's second reproduction of the same blocker: no "--profile" flag
+// at all, but a profile already sits under the default target name and
+// already carries deliberate values. "init" must refuse rather than
+// silently overwriting them.
+func TestRunInit_RefusesToOverwriteAPreExistingProfileNamedGlobal(t *testing.T) {
+	home := setupEnv(t)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	writeFile(t, cfgPath, `
+profiles:
+  global:
+    user.email: deliberate@example.test
+    user.name: Deliberate Name
+`)
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", cfgPath, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("init --move-identity=yes = 0, want a refusal when profile %q already exists, stdout: %s", defaultMovedProfileName, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "already exists") {
+		t.Fatalf("init stderr = %q, want it to name the existing profile conflict", stderr.String())
+	}
+
+	after, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", cfgPath, err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("init changed %s despite refusing:\nbefore: %q\nafter:  %q", cfgPath, before, after)
+	}
+}
+
+// TestRunInit_AbortsTheMoveWhenTheUpdatedConfigWouldNotLoad covers the
+// review's "should": a pre-existing ~/.gitcd.yaml that already carries an
+// unknown key still carries it once AddProfileKeys merges the moved
+// identity in, so the result does not load either. "init" must abort
+// before removing anything from the global git configuration, rather
+// than exiting 0 with the identity gone from everywhere and a gitcd
+// configuration that does not load.
+func TestRunInit_AbortsTheMoveWhenTheUpdatedConfigWouldNotLoad(t *testing.T) {
+	home := setupEnv(t)
+	globalPath := globalConfigPath(home)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	writeFile(t, cfgPath, "totallyUnknownKey: 1\n")
+
+	beforeCfg, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", cfgPath, err)
+	}
+	beforeGlobal, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", globalPath, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("init --move-identity=yes = 0, want a failure when the updated configuration would not load, stdout: %s", stdout.String())
+	}
+
+	afterCfg, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", cfgPath, err)
+	}
+	if string(afterCfg) != string(beforeCfg) {
+		t.Fatalf("init changed %s despite aborting:\nbefore: %q\nafter:  %q", cfgPath, beforeCfg, afterCfg)
+	}
+
+	afterGlobal, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", globalPath, err)
+	}
+	if string(afterGlobal) != string(beforeGlobal) {
+		t.Fatalf("init removed the global identity despite aborting:\nbefore: %q\nafter:  %q", beforeGlobal, afterGlobal)
+	}
+
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatalf("read dir %s: %v", home, err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), filepath.Base(cfgPath)+".gitcd-validate-tmp") {
+			t.Fatalf("init left a temporary validation file behind: %s", e.Name())
+		}
+	}
+}
+
 func TestRunInit_NeverWritesToTheRealHomeDirectory(t *testing.T) {
 	// A sanity check on this test file's own isolation, not gitcd's
 	// behaviour: every init test above must run with os.UserHomeDir()
