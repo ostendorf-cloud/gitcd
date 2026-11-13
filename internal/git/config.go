@@ -95,6 +95,25 @@ func ConfigGetLocal(ctx context.Context, path, key string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// ConfigGetLocalBool runs "git -C path config --local --type=bool --get
+// key" and reports the boolean value git itself normalises any of its
+// accepted spellings ("true", "yes", "on", "1", and their opposites) to.
+// ok is false when key carries no local value at all, which is not an
+// error: a repository with no local "extensions.worktreeConfig" at all is
+// the common case "adopt" expects, not a failure.
+func ConfigGetLocalBool(ctx context.Context, path, key string) (value bool, ok bool, err error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "config", "--local", "--type=bool", "--get", key)
+	out, runErr := cmd.Output()
+	if runErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) && exitErr.ExitCode() == 1 {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("git: read local %s in %s: %w", key, path, runErr)
+	}
+	return strings.TrimSpace(string(out)) == "true", true, nil
+}
+
 // ConfigUnsetLocal runs "git -C path config --local --unset-all key",
 // removing every local value key carries. It wraps ErrConfigKeyNotSet,
 // rather than failing, when key already carries no local value: a caller

@@ -191,6 +191,61 @@ func TestLocalConfig(t *testing.T) {
 	})
 }
 
+func TestConfigGetLocalBool(t *testing.T) {
+	setupGitEnv(t)
+
+	t.Run("reports true for every spelling git itself accepts", func(t *testing.T) {
+		for _, spelling := range []string{"true", "yes", "on", "1"} {
+			root := t.TempDir()
+			initRepository(t, root)
+			run(t, root, "config", "--local", "extensions.worktreeConfig", spelling)
+
+			got, ok, err := git.ConfigGetLocalBool(context.Background(), root, "extensions.worktreeConfig")
+			if err != nil {
+				t.Fatalf("ConfigGetLocalBool() returned an unexpected error: %v", err)
+			}
+			if !ok {
+				t.Fatal("ConfigGetLocalBool() ok = false, want true for a key that is set")
+			}
+			if !got {
+				t.Fatalf("ConfigGetLocalBool() for %q = false, want true", spelling)
+			}
+		}
+	})
+
+	t.Run("reports false for every negative spelling", func(t *testing.T) {
+		for _, spelling := range []string{"false", "no", "off", "0"} {
+			root := t.TempDir()
+			initRepository(t, root)
+			run(t, root, "config", "--local", "extensions.worktreeConfig", spelling)
+
+			got, ok, err := git.ConfigGetLocalBool(context.Background(), root, "extensions.worktreeConfig")
+			if err != nil {
+				t.Fatalf("ConfigGetLocalBool() returned an unexpected error: %v", err)
+			}
+			if !ok {
+				t.Fatal("ConfigGetLocalBool() ok = false, want true for a key that is set")
+			}
+			if got {
+				t.Fatalf("ConfigGetLocalBool() for %q = true, want false", spelling)
+			}
+		}
+	})
+
+	t.Run("ok is false for a key that is not set at all", func(t *testing.T) {
+		root := t.TempDir()
+		initRepository(t, root)
+
+		got, ok, err := git.ConfigGetLocalBool(context.Background(), root, "extensions.worktreeConfig")
+		if err != nil {
+			t.Fatalf("ConfigGetLocalBool() returned an unexpected error: %v", err)
+		}
+		if ok {
+			t.Fatalf("ConfigGetLocalBool() ok = true, got = %v, want ok = false for an unset key", got)
+		}
+	})
+}
+
 func TestShowOrigin(t *testing.T) {
 	setupGitEnv(t)
 
