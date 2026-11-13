@@ -12,6 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ostendorf-cloud/gitcd/internal/config"
+	"github.com/ostendorf-cloud/gitcd/internal/git"
 )
 
 // globalConfigPath mirrors setupEnv's own choice of global git configuration
@@ -590,6 +593,305 @@ func TestRunInit_AbortsTheMoveWhenTheUpdatedConfigWouldNotLoad(t *testing.T) {
 			t.Fatalf("init left a temporary validation file behind: %s", e.Name())
 		}
 	}
+}
+
+// TestRunInit_NeverClaimsSuccessWhileLosingAMoveIntoABareProfilesKey is
+// the exact reproduction pull request 12's review returned as this
+// round's blocker: a hand written ~/.gitcd.yaml that declares "profiles:"
+// and leaves it empty, the shape "profiles:\n" decodes to a "!!null"
+// scalar node rather than a mapping node. "init --move-identity=yes" must
+// not be able to print that it moved the identity, remove it from the
+// global git configuration, exit 0, and leave ~/.gitcd.yaml byte for byte
+// unchanged: either the move genuinely lands in the file, or the command
+// refuses and leaves everything, including the global identity, exactly
+// as it was.
+func TestRunInit_NeverClaimsSuccessWhileLosingAMoveIntoABareProfilesKey(t *testing.T) {
+	home := setupEnv(t)
+	globalPath := globalConfigPath(home)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	writeFile(t, cfgPath, "root: ~/Code\nprofiles:\n")
+
+	beforeCfg, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", cfgPath, err)
+	}
+	beforeGlobal, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", globalPath, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
+
+	afterCfg, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", cfgPath, err)
+	}
+	afterGlobal, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", globalPath, err)
+	}
+	cfgCarriesMove := strings.Contains(string(afterCfg), "[email protected]")
+	globalKeysGone := !strings.Contains(string(afterGlobal), "Test User") && !strings.Contains(string(afterGlobal), "[email protected]")
+
+	// The one outcome that must never happen, regardless of exit code:
+	// the identity gone from the global git configuration while
+	// ~/.gitcd.yaml does not actually carry it.
+	if globalKeysGone && !cfgCarriesMove {
+		t.Fatalf(
+			"init removed the global identity without %s carrying the move: exit=%d stdout=%q stderr=%q cfg after=%q",
+			cfgPath, code, stdout.String(), stderr.String(), afterCfg,
+		)
+	}
+
+	switch code {
+	case 0:
+		if !cfgCarriesMove {
+			t.Fatalf("init exited 0 without %s carrying the moved identity: %q", cfgPath, afterCfg)
+		}
+		if !globalKeysGone {
+			t.Fatalf("init exited 0 without removing the global identity: %q", afterGlobal)
+		}
+	default:
+		if string(afterCfg) != string(beforeCfg) {
+			t.Fatalf("init refused but still changed %s:\nbefore: %q\nafter:  %q", cfgPath, beforeCfg, afterCfg)
+		}
+		if string(afterGlobal) != string(beforeGlobal) {
+			t.Fatalf("init refused but still changed the global git configuration:\nbefore: %q\nafter:  %q", beforeGlobal, afterGlobal)
+		}
+	}
+}
+
+// TestRunInit_DoesNotFollowAPreexistingSymlinkAtTheValidationTempPath
+// covers the review's third "should": the validation copy used to be
+// written to a fixed, predictable path next to cfgPath with os.WriteFile,
+// which follows a symlink already sitting there. A symlink planted at
+// that exact legacy name, pointing anywhere else, must not have its
+// target overwritten by this command.
+func TestRunInit_DoesNotFollowAPreexistingSymlinkAtTheValidationTempPath(t *testing.T) {
+	home := setupEnv(t)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+
+	canary := filepath.Join(home, "canary.txt")
+	writeFile(t, canary, "do not touch\n")
+
+	legacyTmpPath := cfgPath + ".gitcd-validate-tmp"
+	if err := os.Symlink(canary, legacyTmpPath); err != nil {
+		t.Fatalf("symlink %s -> %s: %v", legacyTmpPath, canary, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("init --move-identity=yes = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	canaryAfter, err := os.ReadFile(canary)
+	if err != nil {
+		t.Fatalf("read %s: %v", canary, err)
+	}
+	if string(canaryAfter) != "do not touch\n" {
+		t.Fatalf("canary content = %q, want it untouched: the validation step wrote through a preexisting symlink at its old, predictable path", canaryAfter)
+	}
+
+	linkTarget, err := os.Readlink(legacyTmpPath)
+	if err != nil {
+		t.Fatalf("readlink %s: %v", legacyTmpPath, err)
+	}
+	if linkTarget != canary {
+		t.Fatalf("legacy symlink target = %q, want it left pointing at %q", linkTarget, canary)
+	}
+
+	cfgContent, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("init did not write %s: %v", cfgPath, err)
+	}
+	if !strings.Contains(string(cfgContent), "[email protected]") {
+		t.Fatalf("%s = %q, want the moved email under profiles.global", cfgPath, cfgContent)
+	}
+}
+
+// TestRunInit_WritesThroughASymlinkedGitcdYAMLRatherThanReplacingIt
+// covers the review's second "should": ~/.gitcd.yaml symlinked into a
+// dotfiles repository, the common setup. The rename this command used to
+// do landed directly on the symlink's own path, replacing the link with
+// an ordinary file and leaving the dotfiles copy holding the stale
+// content. The link, and the dotfiles copy it points at, must both still
+// carry the move afterwards.
+func TestRunInit_WritesThroughASymlinkedGitcdYAMLRatherThanReplacingIt(t *testing.T) {
+	home := setupEnv(t)
+	dotfilesCopy := filepath.Join(home, "dotfiles", "gitcd.yaml")
+	writeFile(t, dotfilesCopy, "profiles:\n  work:\n    user.email: work@example.test\n")
+
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	if err := os.Symlink(dotfilesCopy, cfgPath); err != nil {
+		t.Fatalf("symlink %s -> %s: %v", cfgPath, dotfilesCopy, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("init --move-identity=yes = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	info, err := os.Lstat(cfgPath)
+	if err != nil {
+		t.Fatalf("lstat %s: %v", cfgPath, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s is no longer a symlink after the move, want the dotfiles link kept intact", cfgPath)
+	}
+	linkTarget, err := os.Readlink(cfgPath)
+	if err != nil {
+		t.Fatalf("readlink %s: %v", cfgPath, err)
+	}
+	if linkTarget != dotfilesCopy {
+		t.Fatalf("%s now points at %q, want it still pointing at %q", cfgPath, linkTarget, dotfilesCopy)
+	}
+
+	dotfilesContent, err := os.ReadFile(dotfilesCopy)
+	if err != nil {
+		t.Fatalf("read %s: %v", dotfilesCopy, err)
+	}
+	if !strings.Contains(string(dotfilesContent), "work@example.test") {
+		t.Fatalf("%s = %q, want the pre-existing profile untouched", dotfilesCopy, dotfilesContent)
+	}
+	if !strings.Contains(string(dotfilesContent), "[email protected]") {
+		t.Fatalf("%s = %q, the dotfiles copy itself must carry the moved identity", dotfilesCopy, dotfilesContent)
+	}
+
+	// Reading through the symlink must agree with reading the dotfiles
+	// copy directly: both name the same file.
+	viaLink, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", cfgPath, err)
+	}
+	if string(viaLink) != string(dotfilesContent) {
+		t.Fatalf("reading %s and %s disagree:\nvia link: %q\ndotfiles: %q", cfgPath, dotfilesCopy, viaLink, dotfilesContent)
+	}
+}
+
+// TestRunInit_MultipleDocumentsRefusalNamesTheFile covers the nit left
+// standing across both review rounds: ErrMultipleDocuments's own message
+// never names the file it refused, so the printed refusal gave no path
+// to look at, even though the configuration may sit at either of two
+// candidate locations.
+func TestRunInit_MultipleDocumentsRefusalNamesTheFile(t *testing.T) {
+	home := setupEnv(t)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	writeFile(t, cfgPath,
+		"profiles:\n  work:\n    user.email: work@example.test\n"+
+			"---\n"+
+			"profiles:\n  personal:\n    user.email: personal@example.test\n",
+	)
+
+	var stdout, stderr bytes.Buffer
+	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("init --move-identity=yes = 0, want a refusal for a multi document file, stdout: %s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "more than one YAML document") {
+		t.Fatalf("init stderr = %q, want it to name the multi document refusal", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), cfgPath) {
+		t.Fatalf("init stderr = %q, want it to name %s, the file it refused", stderr.String(), cfgPath)
+	}
+}
+
+// TestTargetProfileConflict_RefusesWhenTheLenientParseItselfFails covers
+// the first "should": targetProfileConflict used to treat any parse
+// failure of its own, lenient decode as "no conflict", waving a move
+// through for a file it could not actually make sense of.
+func TestTargetProfileConflict_RefusesWhenTheLenientParseItselfFails(t *testing.T) {
+	home := setupEnv(t)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	writeFile(t, cfgPath, "profiles:\n  - not\n  - a\n  - mapping\n")
+
+	msg, err := targetProfileConflict(cfgPath, "global")
+	if err != nil {
+		t.Fatalf("targetProfileConflict() returned an unexpected error: %v", err)
+	}
+	if msg == "" {
+		t.Fatal("targetProfileConflict() = \"\" (no conflict), want a refusal when the file does not even parse")
+	}
+}
+
+// TestTargetProfileConflict_AnUnrelatedUnknownKeyAloneIsNotAConflict
+// confirms the fix above stays independent of config.LoadFrom's own,
+// stricter unknown key rejection: a key this lenient parse does not name
+// at all must not, by itself, read as a parse failure.
+func TestTargetProfileConflict_AnUnrelatedUnknownKeyAloneIsNotAConflict(t *testing.T) {
+	home := setupEnv(t)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	writeFile(t, cfgPath, "totallyUnknownKey: 1\n")
+
+	msg, err := targetProfileConflict(cfgPath, "global")
+	if err != nil {
+		t.Fatalf("targetProfileConflict() returned an unexpected error: %v", err)
+	}
+	if msg != "" {
+		t.Fatalf("targetProfileConflict() = %q, want no conflict for a file whose only problem is unrelated to profiles or defaultProfile", msg)
+	}
+}
+
+// TestTargetProfileConflict_AParseFailureIsNotMaskedByAnUnrelatedUnknownKey
+// combines both: a genuinely malformed "profiles" key must still be
+// refused even alongside an unrelated unknown key, rather than either
+// masking the other.
+func TestTargetProfileConflict_AParseFailureIsNotMaskedByAnUnrelatedUnknownKey(t *testing.T) {
+	home := setupEnv(t)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	writeFile(t, cfgPath, "totallyUnknownKey: 1\nprofiles:\n  - not\n  - a\n  - mapping\n")
+
+	msg, err := targetProfileConflict(cfgPath, "global")
+	if err != nil {
+		t.Fatalf("targetProfileConflict() returned an unexpected error: %v", err)
+	}
+	if msg == "" {
+		t.Fatal("targetProfileConflict() = \"\" (no conflict), want the malformed profiles key refused alongside an unrelated unknown key")
+	}
+}
+
+// TestIdentityKeysLanded is the unit level proof for the blocker's belt
+// and braces guarantee: moveGlobalIdentity must abort, rather than go on
+// to remove anything from the global git configuration, whenever the
+// configuration it is about to rename into place does not actually carry
+// every key it claims to have moved.
+func TestIdentityKeysLanded(t *testing.T) {
+	t.Parallel()
+	found := []git.GlobalIdentityValue{{Key: "user.email", Value: "[email protected]"}}
+
+	t.Run("reports an error when the profile does not carry the moved key", func(t *testing.T) {
+		t.Parallel()
+		cfg := config.Config{Profiles: map[string]config.Profile{"global": {}}}
+		if err := identityKeysLanded(cfg, "global", found); err == nil {
+			t.Fatal("identityKeysLanded() = nil, want an error when the profile does not carry the key")
+		}
+	})
+
+	t.Run("reports an error when the profile does not exist at all", func(t *testing.T) {
+		t.Parallel()
+		cfg := config.Config{}
+		if err := identityKeysLanded(cfg, "global", found); err == nil {
+			t.Fatal("identityKeysLanded() = nil, want an error when the profile does not exist at all")
+		}
+	})
+
+	t.Run("reports an error when the value does not match what was moved", func(t *testing.T) {
+		t.Parallel()
+		cfg := config.Config{Profiles: map[string]config.Profile{"global": {"user.email": "wrong@example.test"}}}
+		if err := identityKeysLanded(cfg, "global", found); err == nil {
+			t.Fatal("identityKeysLanded() = nil, want an error when the value does not match")
+		}
+	})
+
+	t.Run("accepts a profile carrying every moved key with its exact value", func(t *testing.T) {
+		t.Parallel()
+		cfg := config.Config{Profiles: map[string]config.Profile{"global": {"user.email": "[email protected]"}}}
+		if err := identityKeysLanded(cfg, "global", found); err != nil {
+			t.Fatalf("identityKeysLanded() = %v, want nil when every moved key matches", err)
+		}
+	})
 }
 
 func TestRunInit_NeverWritesToTheRealHomeDirectory(t *testing.T) {

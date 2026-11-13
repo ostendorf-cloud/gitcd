@@ -36,8 +36,14 @@ func AddProfileKeys(existing []byte, name string, keys map[string]string) ([]byt
 		return nil, fmt.Errorf("config: the existing configuration is not a YAML mapping at its top level")
 	}
 
-	profiles := mappingChild(root, "profiles")
-	profile := mappingChild(profiles, name)
+	profiles, err := mappingChild(root, "profiles")
+	if err != nil {
+		return nil, err
+	}
+	profile, err := mappingChild(profiles, name)
+	if err != nil {
+		return nil, err
+	}
 	for _, key := range sortedStringKeys(keys) {
 		setScalarChild(profile, key, keys[key])
 	}
@@ -142,14 +148,38 @@ var errNotFound = errors.New("config: key not found in mapping")
 // mappingChild returns parent's child mapping node keyed name, appending
 // both the key and a fresh, empty mapping value when parent does not
 // already carry one.
-func mappingChild(parent *yaml.Node, name string) *yaml.Node {
-	if value, err := mappingLookup(parent, name); err == nil {
-		return value
+//
+// A child that already exists but decoded as an empty "!!null" scalar is
+// turned into a mapping node in place rather than returned as is: that is
+// exactly the shape a bare "profiles:" or "defaultProfile:", with nothing
+// after the colon, decodes to, and appending a key/value pair to a
+// scalar node's Content is silently ignored by yaml.Marshal, which let
+// "init" report a move that never reached the file. A child that exists
+// as some other, non-mapping, non-null shape, a list or a quoted string
+// for instance, is refused instead of silently coerced, since turning it
+// into a mapping would discard whatever a person deliberately wrote
+// there.
+func mappingChild(parent *yaml.Node, name string) (*yaml.Node, error) {
+	value, err := mappingLookup(parent, name)
+	if errors.Is(err, errNotFound) {
+		key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}
+		value = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		parent.Content = append(parent.Content, key, value)
+		return value, nil
 	}
-	key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}
-	value := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	parent.Content = append(parent.Content, key, value)
-	return value
+	switch {
+	case value.Kind == yaml.MappingNode:
+		return value, nil
+	case value.Kind == yaml.ScalarNode && value.Tag == "!!null":
+		value.Kind = yaml.MappingNode
+		value.Tag = "!!map"
+		value.Value = ""
+		value.Style = 0
+		value.Content = nil
+		return value, nil
+	default:
+		return nil, fmt.Errorf("config: %q is not a YAML mapping in the existing configuration", name)
+	}
 }
 
 // setScalarChild sets parent's child scalar value keyed key to value,

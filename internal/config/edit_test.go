@@ -92,6 +92,55 @@ func TestAddProfileKeys(t *testing.T) {
 		}
 	})
 
+	t.Run("writes into a bare profiles key with no value rather than silently losing the write", func(t *testing.T) {
+		t.Parallel()
+		// pull request 12's exact reproduction: a hand written file that
+		// declares "profiles:" and leaves it empty. That decodes to a
+		// "!!null" scalar node, not a mapping node, so appending the new
+		// profile's key and value to it must not be silently swallowed by
+		// yaml.Marshal the way it was before this fix.
+		existing := "root: /tmp/example/Code\nprofiles:\n"
+
+		out, err := config.AddProfileKeys([]byte(existing), "global", map[string]string{"user.email": "me@example.test"})
+		if err != nil {
+			t.Fatalf("AddProfileKeys() returned an unexpected error for a bare \"profiles:\" key: %v", err)
+		}
+
+		path := filepath.Join(t.TempDir(), "gitcd.yaml")
+		writeFile(t, path, string(out))
+		cfg, err := config.LoadFrom(path)
+		if err != nil {
+			t.Fatalf("LoadFrom() the result returned an unexpected error: %v", err)
+		}
+		if got, want := cfg.Profiles["global"]["user.email"], "me@example.test"; got != want {
+			t.Fatalf("profiles.global.user.email = %q, want %q; AddProfileKeys() must not report success while losing the write", got, want)
+		}
+	})
+
+	t.Run("writes into a profile name already present with no value the same way", func(t *testing.T) {
+		t.Parallel()
+		// The same "!!null" scalar shape, one call deeper: "profiles"
+		// already exists, but the target profile name sits under it as a
+		// bare key, the shape a person placing a profile name before
+		// filling it in would plausibly write.
+		existing := "profiles:\n  global:\n"
+
+		out, err := config.AddProfileKeys([]byte(existing), "global", map[string]string{"user.name": "Jane Doe"})
+		if err != nil {
+			t.Fatalf("AddProfileKeys() returned an unexpected error for a bare profile name: %v", err)
+		}
+
+		path := filepath.Join(t.TempDir(), "gitcd.yaml")
+		writeFile(t, path, string(out))
+		cfg, err := config.LoadFrom(path)
+		if err != nil {
+			t.Fatalf("LoadFrom() the result returned an unexpected error: %v", err)
+		}
+		if got, want := cfg.Profiles["global"]["user.name"], "Jane Doe"; got != want {
+			t.Fatalf("profiles.global.user.name = %q, want %q; AddProfileKeys() must not report success while losing the write", got, want)
+		}
+	})
+
 	t.Run("rejects a document that is not a mapping at its top level", func(t *testing.T) {
 		t.Parallel()
 		_, err := config.AddProfileKeys([]byte("- not\n- a\n- mapping\n"), "global", map[string]string{"user.email": "me@example.test"})

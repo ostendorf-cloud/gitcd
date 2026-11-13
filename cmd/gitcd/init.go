@@ -247,7 +247,18 @@ func describeIdentityKeys(found []git.GlobalIdentityValue) string {
 // through config.LoadFrom: this is purely a name collision check, which
 // must not block on some unrelated problem the rest of the file carries,
 // a problem moveGlobalIdentity's own, stricter validation is already
-// responsible for catching once there is something to write.
+// responsible for catching once there is something to write. The decoder
+// stays loose on purpose: it is never given KnownFields, so a field this
+// struct does not name, "totallyUnknownKey" for instance, is simply
+// ignored here rather than failing this parse, keeping that failure mode
+// for the stricter check downstream, the one already responsible for it.
+//
+// A failure of this lenient parse itself, meaning the two fields it does
+// name do not even decode, a "profiles" that is a list rather than a
+// mapping for instance, is refused rather than waved through: a parse
+// this forgiving failing at all means the file's shape could not be
+// understood well enough to say there is no conflict, and "no conflict"
+// must never be the answer to "I could not tell."
 //
 // Two collisions are refused, matching pull request 12's review:
 //   - target already names defaultProfile. Never allowed, with no
@@ -278,10 +289,11 @@ func targetProfileConflict(cfgPath, target string) (string, error) {
 		DefaultProfile string                    `yaml:"defaultProfile"`
 	}
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		// A file this lenient a parse cannot even make sense of is left
-		// for moveGlobalIdentity's own, stricter validation to reject
-		// with a precise error once there is something to write.
-		return "", nil
+		return fmt.Sprintf(
+			"%s does not parse well enough to check profile %q for a conflict: %v\n"+
+				"refusing the move rather than risking a silent overwrite or a silently rearmed default",
+			cfgPath, target, err,
+		), nil
 	}
 
 	if doc.DefaultProfile != "" && doc.DefaultProfile == target {
@@ -359,7 +371,7 @@ func moveGlobalIdentity(
 	}
 	updatedYAML, err := config.AddProfileKeys(existingYAML, target, keys)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", cfgPath, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(cfgPath), err)
@@ -375,18 +387,73 @@ func moveGlobalIdentity(
 	// that argument. Validating against a temporary file, rather than
 	// cfgPath itself, means a failure here leaves cfgPath exactly as it
 	// was, with nothing left to restore.
-	tmpPath := cfgPath + ".gitcd-validate-tmp"
-	if err := os.WriteFile(tmpPath, updatedYAML, 0o644); err != nil {
+	//
+	// The temporary file gets an unpredictable name from os.CreateTemp,
+	// in the same directory as cfgPath so the later rename stays on one
+	// filesystem, rather than a fixed, guessable name: a fixed name is a
+	// symlink another process or a leftover from a previous run could
+	// already occupy, and os.WriteFile follows a symlink wherever it
+	// finds one, which would render this validation copy through that
+	// link instead of writing an ordinary file gitcd fully controls.
+	tmpFile, err := os.CreateTemp(filepath.Dir(cfgPath), filepath.Base(cfgPath)+".gitcd-validate-tmp-*")
+	if err != nil {
+		return fmt.Errorf("create a temporary file next to %s: %w", cfgPath, err)
+	}
+	tmpPath := tmpFile.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	// os.CreateTemp creates its file 0o600; the configuration file this
+	// temporary copy stands in for is written 0o644, so match that
+	// before the rename below carries this file's own mode over to
+	// cfgPath.
+	if err := tmpFile.Chmod(0o644); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("set permissions on %s: %w", tmpPath, err)
+	}
+	if _, err := tmpFile.Write(updatedYAML); err != nil {
+		_ = tmpFile.Close()
 		return fmt.Errorf("write %s: %w", tmpPath, err)
 	}
-	defer func() { _ = os.Remove(tmpPath) }()
-	if _, err := config.LoadFrom(tmpPath); err != nil {
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("write %s: %w", tmpPath, err)
+	}
+
+	cfg, err := config.LoadFrom(tmpPath)
+	if err != nil {
 		return fmt.Errorf("the updated configuration would not load, aborting before touching %s: %w", globalPath, err)
 	}
-	if err := os.Rename(tmpPath, cfgPath); err != nil {
-		return fmt.Errorf("write %s: %w", cfgPath, err)
+	// A cheap belt and braces on top of LoadFrom succeeding: LoadFrom not
+	// erroring only proves the rendered file is valid YAML and a valid
+	// gitcd configuration, not that this particular edit actually landed
+	// in it, which is exactly the gap a "profiles:" key decoding to a
+	// "!!null" scalar opened. identityKeysLanded parses the same bytes
+	// that are about to replace cfgPath, through the same loader every
+	// other command uses, so it catches a future shape of this class
+	// regardless of where in the render path it originates, and it runs
+	// before the rename and before the unset loop below, so a failure
+	// here guarantees the global keys are never removed.
+	if err := identityKeysLanded(cfg, target, found); err != nil {
+		return fmt.Errorf("the write that was supposed to move %s did not, aborting before touching %s: %w", describeIdentityKeys(found), globalPath, err)
 	}
-	fmt.Fprintf(stdout, "moved %s into profile %q in %s\n", describeIdentityKeys(found), target, cfgPath)
+
+	// cfgPath may itself be a symlink, the common shape for a
+	// configuration tracked in a separate dotfiles repository: renaming
+	// a file onto a symlink's own path replaces the link with an
+	// ordinary file, silently detaching it from whatever it pointed at.
+	// Resolving it first and writing through the resolved path keeps the
+	// link itself, and the dotfiles copy it points at, intact. A cfgPath
+	// that does not exist yet, the first run on a machine with no
+	// configuration file at all, is not a symlink to resolve, and is
+	// written at cfgPath directly.
+	writeTarget := cfgPath
+	if resolved, err := filepath.EvalSymlinks(cfgPath); err == nil {
+		writeTarget = resolved
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("resolve %s: %w", cfgPath, err)
+	}
+	if err := os.Rename(tmpPath, writeTarget); err != nil {
+		return fmt.Errorf("write %s: %w", writeTarget, err)
+	}
+	fmt.Fprintf(stdout, "moved %s into profile %q in %s\n", describeIdentityKeys(found), target, writeTarget)
 
 	if err := backupGlobalConfig(); err != nil {
 		return err
@@ -403,5 +470,23 @@ func moveGlobalIdentity(
 			"to reverse this, restore the backups above, or set the keys shown earlier back with \"git config --global\"\n",
 		target,
 	)
+	return nil
+}
+
+// identityKeysLanded reports an error naming the first of found's keys
+// that profile target does not carry in cfg with exactly the value found
+// recorded, or nil when every one of them does. cfg is expected to come
+// from parsing the exact bytes moveGlobalIdentity is about to rename into
+// place, so a non-nil result here means that write does not contain what
+// it claims to, and the caller must abort before going anywhere near the
+// global git configuration's own keys.
+func identityKeysLanded(cfg config.Config, target string, found []git.GlobalIdentityValue) error {
+	profile := cfg.Profiles[target]
+	for _, v := range found {
+		got, ok := profile[v.Key]
+		if !ok || got != v.Value {
+			return fmt.Errorf("profile %q does not carry %s", target, v.Key)
+		}
+	}
 	return nil
 }
