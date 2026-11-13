@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
+	"github.com/ostendorf-cloud/gitcd/internal/layout"
+	"github.com/ostendorf-cloud/gitcd/internal/remote"
 )
 
 // withHome points HOME, and XDG_CONFIG_HOME at a fresh subdirectory of it,
@@ -138,6 +140,136 @@ hosts:
 		}
 		if github.Protocol != "ssh" {
 			t.Fatalf("github.com protocol = %q, want %q", github.Protocol, "ssh")
+		}
+	})
+
+	t.Run("adding an alias to a default host keeps its default layout, end to end", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+hosts:
+  dev.azure.com:
+    aliases: [ssh.dev.azure.com, vs-ssh.visualstudio.com, my-ado-alias]
+`)
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+
+		r, err := remote.Parse("https://dev.azure.com/acme-corp/Widget/_git/widget-repo", got.AliasMap())
+		if err != nil {
+			t.Fatalf("remote.Parse() returned an unexpected error: %v", err)
+		}
+		path, err := layout.Render(got.LayoutFor(r.Host), r)
+		if err != nil {
+			t.Fatalf("layout.Render() returned an unexpected error: %v, the default layout was dropped", err)
+		}
+		if want := "dev.azure.com/acme-corp/Widget/widget-repo"; path != want {
+			t.Fatalf("Render() = %q, want %q, the project segment must survive", path, want)
+		}
+
+		r, err = remote.Parse("git@my-ado-alias:v3/acme-corp/Widget/widget-repo.git", got.AliasMap())
+		if err != nil {
+			t.Fatalf("remote.Parse() of the new alias returned an unexpected error: %v", err)
+		}
+		if r.Host != "dev.azure.com" {
+			t.Fatalf("remote.Parse() resolved %q to host %q, want dev.azure.com", "my-ado-alias", r.Host)
+		}
+	})
+
+	t.Run("setting a layout on a default host keeps its default aliases", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+hosts:
+  dev.azure.com:
+    layout: "{host}/{org}/{project}/{repo}-mirror"
+`)
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+
+		azure, ok := got.Hosts["dev.azure.com"]
+		if !ok {
+			t.Fatalf("Load().Hosts has no entry for dev.azure.com: %+v", got.Hosts)
+		}
+		if azure.Layout != "{host}/{org}/{project}/{repo}-mirror" {
+			t.Fatalf("dev.azure.com layout = %q, want the configured template", azure.Layout)
+		}
+		if want := []string{"ssh.dev.azure.com", "vs-ssh.visualstudio.com"}; !equalStrings(azure.Aliases, want) {
+			t.Fatalf("dev.azure.com aliases = %v, want the default aliases %v kept", azure.Aliases, want)
+		}
+	})
+
+	t.Run("a host with no default entry still works", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+hosts:
+  gitlab.com:
+    protocol: ssh
+`)
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+
+		gitlab, ok := got.Hosts["gitlab.com"]
+		if !ok {
+			t.Fatalf("Load().Hosts has no entry for gitlab.com: %+v", got.Hosts)
+		}
+		if gitlab.Layout != got.Default {
+			t.Fatalf("gitlab.com layout = %q, want the fallback default %q", gitlab.Layout, got.Default)
+		}
+		if len(gitlab.Aliases) != 0 {
+			t.Fatalf("gitlab.com aliases = %v, want none", gitlab.Aliases)
+		}
+		if gitlab.Protocol != "ssh" {
+			t.Fatalf("gitlab.com protocol = %q, want %q", gitlab.Protocol, "ssh")
+		}
+	})
+
+	t.Run("an empty alias list deliberately clears the default aliases", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+hosts:
+  dev.azure.com:
+    aliases: []
+`)
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+
+		azure, ok := got.Hosts["dev.azure.com"]
+		if !ok {
+			t.Fatalf("Load().Hosts has no entry for dev.azure.com: %+v", got.Hosts)
+		}
+		if len(azure.Aliases) != 0 {
+			t.Fatalf("dev.azure.com aliases = %v, want none, an explicit empty list clears the default", azure.Aliases)
+		}
+		if _, ok := got.AliasMap()["ssh.dev.azure.com"]; ok {
+			t.Fatal("AliasMap() still resolves the cleared default alias ssh.dev.azure.com")
+		}
+	})
+
+	t.Run("an empty layout deliberately clears the default layout, falling back to the generic default", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+hosts:
+  dev.azure.com:
+    layout: ""
+`)
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+
+		if got.LayoutFor("dev.azure.com") != got.Default {
+			t.Fatalf("LayoutFor(dev.azure.com) = %q, want the generic default %q", got.LayoutFor("dev.azure.com"), got.Default)
 		}
 	})
 
