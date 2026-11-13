@@ -289,12 +289,31 @@ func LoadFrom(path string) (cfg Config, err error) {
 
 	for name, rh := range r.Hosts {
 		host := strings.ToLower(name)
-		h := Host{Layout: cfg.Default}
-		if rh.Layout != nil {
+		// h starts from the default entry for this host, if Default
+		// shipped one: a key the file's own entry leaves out must keep
+		// that default's value, not the generic fallback, or setting one
+		// field silently drops every other field the default carried.
+		h := cfg.Hosts[host]
+		switch {
+		case rh.Layout != nil:
+			// Explicitly set, even to "": a cleared layout falls back to
+			// the generic default through LayoutFor, same as an entry
+			// with no layout at all.
 			h.Layout = *rh.Layout
+		case h.Layout == "":
+			h.Layout = cfg.Default
 		}
-		for _, alias := range rh.Aliases {
-			h.Aliases = append(h.Aliases, strings.ToLower(alias))
+		if rh.Aliases != nil {
+			// A present "aliases" key, even an empty list, replaces the
+			// default's aliases rather than merging into them: a nil
+			// slice (the key left out) is told apart from a non-nil, zero
+			// length one (the key set to "[]") by yaml.v3 itself, so
+			// "aliases: []" is how a user deliberately clears them.
+			aliases := make([]string, 0, len(rh.Aliases))
+			for _, alias := range rh.Aliases {
+				aliases = append(aliases, strings.ToLower(alias))
+			}
+			h.Aliases = aliases
 		}
 		if rh.Protocol != nil {
 			h.Protocol = *rh.Protocol
