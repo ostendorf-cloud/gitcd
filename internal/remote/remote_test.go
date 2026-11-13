@@ -214,3 +214,46 @@ func TestRemote_URL(t *testing.T) {
 		})
 	}
 }
+
+func TestRemote_WebURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		remote remote.Remote
+		want   string
+	}{
+		{
+			name:   "github renders the owner and repo path with no dot git suffix",
+			remote: remote.Remote{Host: "github.com", Owner: "acme", Repo: "widget"},
+			want:   "https://github.com/acme/widget",
+		},
+		{
+			name:   "azure devops renders its own git path",
+			remote: remote.Remote{Host: "dev.azure.com", Owner: "acme-corp", Project: "Widget", Repo: "widget-repo"},
+			want:   "https://dev.azure.com/acme-corp/Widget/_git/widget-repo",
+		},
+		{
+			// A self hosted forge, or any host this package has no
+			// special case for, still gets a plausible guess: the
+			// generic owner/repo shape GitHub, GitLab, Bitbucket and
+			// Gitea all share.
+			name:   "an unknown host falls back to the generic owner and repo shape",
+			remote: remote.Remote{Host: "git.example.test", Owner: "acme", Repo: "widget"},
+			want:   "https://git.example.test/acme/widget",
+		},
+		{
+			name:   "a gitlab subgroup owner is preserved",
+			remote: remote.Remote{Host: "gitlab.com", Owner: "acme/platform", Repo: "widget"},
+			want:   "https://gitlab.com/acme/platform/widget",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.remote.WebURL(); got != tt.want {
+				t.Fatalf("WebURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -124,6 +124,18 @@ func (r Remote) URL(protocol string) (string, error) {
 	}
 }
 
+// WebURL renders r into the URL of its web page: the same shape as its
+// "https" clone URL, minus a trailing ".git", since that is the one path
+// shape GitHub, GitLab, Bitbucket, Gitea and most other forges share for
+// a repository's own page, Azure DevOps's "_git" path already included.
+// A host with a different shape of its own is not something this
+// package knows: the generic form is reported anyway, so a caller still
+// opens something plausible rather than nothing at all.
+func (r Remote) WebURL() string {
+	httpsURL, _ := r.URL("https")
+	return strings.TrimSuffix(httpsURL, ".git")
+}
+
 // classify splits input into a raw, un-lowercased host and a raw path, for
 // an SSH or HTTPS URL, the scp style "[user@]host:path" and the bare
 // "host/path" shorthand. It does not resolve aliases or interpret the path.
