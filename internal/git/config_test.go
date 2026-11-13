@@ -339,3 +339,126 @@ func TestIdentityKeyAfterInclude(t *testing.T) {
 // --add" always inserts a new key into that last matching section, so an
 // identity key sitting between two include sections ends up before the
 // insertion point, safe, while one sitting after both does not.
+
+func TestFindGlobalIdentityValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    []git.GlobalIdentityValue
+	}{
+		{
+			name:    "no identity key at all",
+			content: "[core]\n\teditor = vim\n",
+			want:    nil,
+		},
+		{
+			name:    "a key before any include, the position IdentityKeyAfterInclude calls safe",
+			content: "[user]\n\tname = Test User\n\temail = test@example.test\n" + "[include]\n\tpath = /other.gitconfig\n",
+			want: []git.GlobalIdentityValue{
+				{Key: "user.name", Value: "Test User"},
+				{Key: "user.email", Value: "test@example.test"},
+			},
+		},
+		{
+			name:    "a key after an include is found too, same as before it",
+			content: "[include]\n\tpath = /other.gitconfig\n" + "[user]\n\tsigningkey = ssh-ed25519 AAAA\n",
+			want: []git.GlobalIdentityValue{
+				{Key: "user.signingkey", Value: "ssh-ed25519 AAAA"},
+			},
+		},
+		{
+			name:    "a quoted value is unquoted, escaped characters undone",
+			content: "[user]\n\tname = \"Jane \\\"The Dev\\\" Doe\"\n",
+			want: []git.GlobalIdentityValue{
+				{Key: "user.name", Value: `Jane "The Dev" Doe`},
+			},
+		},
+		{
+			name:    "a bare boolean key with no equals sign carries true",
+			content: "[commit]\n\tgpgsign\n",
+			want: []git.GlobalIdentityValue{
+				{Key: "commit.gpgsign", Value: "true"},
+			},
+		},
+		{
+			name:    "a key under an unrelated section is ignored",
+			content: "[alias]\n\tname = \"Test\"\n",
+			want:    nil,
+		},
+		{
+			name:    "an includeIf section is scanned too, not only a bare include",
+			content: "[includeIf \"gitdir:/some/path/\"]\n\tsigningkey = ssh-ed25519 AAAA\n",
+			want:    nil,
+		},
+		{
+			name:    "the last value wins when a key is set more than once",
+			content: "[user]\n\temail = first@example.test\n[user]\n\temail = second@example.test\n",
+			want: []git.GlobalIdentityValue{
+				{Key: "user.email", Value: "second@example.test"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := git.FindGlobalIdentityValues([]byte(tt.content), git.IdentityKeys)
+			if len(got) != len(tt.want) {
+				t.Fatalf("FindGlobalIdentityValues() = %+v, want %+v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("FindGlobalIdentityValues()[%d] = %+v, want %+v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestFindGlobalIdentityValues_IncludeIfSectionNameRequiresNoSubsection
+// documents a deliberate narrowing shared with IdentityKeyAfterInclude:
+// "[includeIf \"...\"]" carries a subsection, the condition itself, so it
+// is never mistaken for the section "includeif" when looking for an
+// identity key, but it is also never itself scanned as a section named
+// after its condition; the key lines under it belong to the subsectioned
+// header's own section name, "includeif", which "user.name" and friends
+// never collide with. This test exists so a future change to how
+// sections are tracked has something to catch a regression against.
+func TestFindGlobalIdentityValues_IncludeIfSectionNameRequiresNoSubsection(t *testing.T) {
+	t.Parallel()
+	content := "[includeIf \"gitdir:/some/path/\"]\n\tpath = /conditional.gitconfig\n[user]\n\temail = after@example.test\n"
+	got := git.FindGlobalIdentityValues([]byte(content), git.IdentityKeys)
+	want := []git.GlobalIdentityValue{{Key: "user.email", Value: "after@example.test"}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("FindGlobalIdentityValues() = %+v, want %+v", got, want)
+	}
+}
+
+func TestConfigUnsetGlobal(t *testing.T) {
+	setupGitEnv(t)
+
+	t.Run("removes a value that was set", func(t *testing.T) {
+		if err := git.ConfigAddGlobal(context.Background(), "user.signingkey", "ssh-ed25519 AAAA"); err != nil {
+			t.Fatalf("ConfigAddGlobal() returned an unexpected error: %v", err)
+		}
+
+		if err := git.ConfigUnsetGlobal(context.Background(), "user.signingkey"); err != nil {
+			t.Fatalf("ConfigUnsetGlobal() returned an unexpected error: %v", err)
+		}
+
+		// A second unset of the same key now wraps ErrConfigKeyNotSet,
+		// which only happens once git itself reports no value left: the
+		// behavioural proof that the first call actually removed it.
+		if err := git.ConfigUnsetGlobal(context.Background(), "user.signingkey"); !errors.Is(err, git.ErrConfigKeyNotSet) {
+			t.Fatalf("ConfigUnsetGlobal() after removal, error = %v, want it to wrap ErrConfigKeyNotSet", err)
+		}
+	})
+
+	t.Run("unset a key that is not set wraps ErrConfigKeyNotSet instead of failing", func(t *testing.T) {
+		err := git.ConfigUnsetGlobal(context.Background(), "user.doesnotexist")
+		if !errors.Is(err, git.ErrConfigKeyNotSet) {
+			t.Fatalf("ConfigUnsetGlobal() error = %v, want it to wrap ErrConfigKeyNotSet", err)
+		}
+	})
+}
