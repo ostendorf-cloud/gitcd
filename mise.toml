@@ -1,0 +1,11 @@
+[tools]
+go = "1.27.3"
+task = "3"
+# Pinned to the patch, not "2": a golangci-lint release is built against one Go patch and
+# cannot read the stdlib export data of a newer one, so the two versions move together.
+golangci-lint = "2.15.0"
+actionlint = "1"
+markdownlint-cli2 = "0.20"
+yamllint = "1"
+gitleaks = "8"
+goreleaser = "2"

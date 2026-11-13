@@ -1,0 +1,30 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - gocritic
+    - govet
+    - misspell
+    - noctx
+    - revive
+    - sloglint
+    - unconvert
+    - unparam
+  settings:
+    errcheck:
+      check-type-assertions: true
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    revive:
+      rules:
+        - name: exported
+          arguments: ["checkPrivateReceivers"]

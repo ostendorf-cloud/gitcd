@@ -1,0 +1,13 @@
+{
+  "ignores": ["**/node_modules/**", "CLAUDE.md", ".claude/worktrees/**"],
+  "config": {
+    "MD013": {
+      "line_length": 100,
+      "tables": false,
+      "code_blocks": false
+    },
+    "MD041": {
+      "front_matter_title": "^\\s*(title|name)\\s*[:=]"
+    }
+  }
+}

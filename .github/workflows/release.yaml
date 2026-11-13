@@ -1,0 +1,50 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [labeled, unlabeled]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    # The label list is release-me.yaml's defaults, spelled out: the condition
+    # cannot read the configuration.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'release-me/') &&
+      contains(
+        fromJSON('["release: pending", "release: tagged", "release: alpha", "release: beta", "release: rc"]'),
+        github.event.label.name
+      ))
+    steps:
+      - name: Mint a release app token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with:
+          app-id: ${{ vars.GH_APP_RELEASE_APP_ID }}
+          private-key: ${{ secrets.GH_APP_RELEASE_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          # A label event checks out the base branch, never the merge ref.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.sha }}
+          fetch-depth: 0
+
+      - name: Tag and release every merged release pull request
+        uses: ostendorf-cloud/release-me/action@e3346c4a5aa463642e8d0627b01b3308dc49e2ec  # v0.5.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
