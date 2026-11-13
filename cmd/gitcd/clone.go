@@ -79,7 +79,7 @@ func runClone(args []string, stdout, stderr io.Writer) int {
 	}
 	logger.Debug("cloning", "url", cloneURL, "dest", dest)
 
-	if err := git.Clone(ctx, cloneURL, dest); err != nil {
+	if err := git.Clone(ctx, cloneURL, dest, stderr); err != nil {
 		fmt.Fprintf(stderr, "gitcd clone: %v\n", err)
 		return 1
 	}

@@ -4,7 +4,9 @@
 package git_test
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,7 +66,7 @@ func TestClone(t *testing.T) {
 		initRepository(t, source)
 
 		dest := filepath.Join(root, "nested", "dest")
-		if err := git.Clone(context.Background(), source, dest); err != nil {
+		if err := git.Clone(context.Background(), source, dest, io.Discard); err != nil {
 			t.Fatalf("Clone(%q, %q) returned an unexpected error: %v", source, dest, err)
 		}
 
@@ -80,9 +82,34 @@ func TestClone(t *testing.T) {
 		root := t.TempDir()
 		dest := filepath.Join(root, "dest")
 
-		err := git.Clone(context.Background(), filepath.Join(root, "missing"), dest)
+		err := git.Clone(context.Background(), filepath.Join(root, "missing"), dest, io.Discard)
 		if err == nil {
 			t.Fatal("Clone() succeeded, want an error for a missing source")
+		}
+	})
+
+	// TestClone/streams_the_clone_s_own_progress_to_the_given_writer guards
+	// against "CombinedOutput", which buffers a clone's progress until the
+	// command finishes and, before this fix, discarded it entirely on
+	// success: a caller had no way to show the user anything while a large
+	// clone was still running. Clone must now write git's own progress to
+	// the given writer unconditionally, not only fold it into an error.
+	t.Run("streams the clone's own progress to the given writer", func(t *testing.T) {
+		root := t.TempDir()
+		source := filepath.Join(root, "source")
+		if err := os.MkdirAll(source, 0o755); err != nil {
+			t.Fatalf("create %s: %v", source, err)
+		}
+		initRepository(t, source)
+
+		dest := filepath.Join(root, "dest")
+		var progress bytes.Buffer
+		if err := git.Clone(context.Background(), source, dest, &progress); err != nil {
+			t.Fatalf("Clone(%q, %q) returned an unexpected error: %v", source, dest, err)
+		}
+
+		if progress.Len() == 0 {
+			t.Fatal("Clone() wrote nothing to the given writer, want git's own clone progress streamed to it")
 		}
 	})
 }
@@ -98,7 +125,7 @@ func TestRemoteURL(t *testing.T) {
 	initRepository(t, source)
 
 	dest := filepath.Join(root, "dest")
-	if err := git.Clone(context.Background(), source, dest); err != nil {
+	if err := git.Clone(context.Background(), source, dest, io.Discard); err != nil {
 		t.Fatalf("Clone(%q, %q) returned an unexpected error: %v", source, dest, err)
 	}
 
@@ -132,7 +159,7 @@ func TestRemoteURL_IsNotResolvedThroughAnInsteadOfRewrite(t *testing.T) {
 	run(t, root, "config", "--global", "url."+"file://"+source+".insteadOf", requested)
 
 	dest := filepath.Join(root, "dest")
-	if err := git.Clone(context.Background(), requested, dest); err != nil {
+	if err := git.Clone(context.Background(), requested, dest, io.Discard); err != nil {
 		t.Fatalf("Clone(%q, %q) returned an unexpected error: %v", requested, dest, err)
 	}
 

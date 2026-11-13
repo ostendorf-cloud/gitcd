@@ -8,8 +8,10 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,18 +19,23 @@ import (
 )
 
 // Clone runs "git clone" from remoteURL into dest, creating dest's parent
-// directories first. The clone inherits the standard git output on its own
-// stdout and stderr are discarded from a caller's view only on failure,
-// where they are folded into the returned error.
-func Clone(ctx context.Context, remoteURL, dest string) error {
+// directories first. Git writes its own clone progress to stderr, which
+// Clone streams to progress as the clone runs, rather than buffering it
+// until the clone finishes, so a slow clone of a large repository shows
+// activity instead of looking hung. Clone's own stdout stays empty, so a
+// caller that prints the destination path there is never interleaved with
+// git's progress output. On failure, the progress already streamed to
+// progress is also folded into the returned error.
+func Clone(ctx context.Context, remoteURL, dest string, progress io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return fmt.Errorf("git: create %s: %w", filepath.Dir(dest), err)
 	}
 
+	var captured bytes.Buffer
 	cmd := exec.CommandContext(ctx, "git", "clone", "--", remoteURL, dest)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("git: clone %s into %s: %w: %s", remoteURL, dest, err, strings.TrimSpace(string(out)))
+	cmd.Stderr = io.MultiWriter(progress, &captured)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git: clone %s into %s: %w: %s", remoteURL, dest, err, strings.TrimSpace(captured.String()))
 	}
 	return nil
 }
