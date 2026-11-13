@@ -297,6 +297,72 @@ func TestRender_HasconfigFormsPerRule(t *testing.T) {
 	}
 }
 
+// TestRender_UnconditionalUseConfigOnly guards the one block in the
+// include file that applies to a repository no rule matches and no
+// default profile covers: every other "useConfigOnly" this package
+// writes sits inside a profile file, reached only through an includeIf
+// condition that such a repository never satisfies.
+func TestRender_UnconditionalUseConfigOnly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("present before every includeIf block when useConfigOnly is on", func(t *testing.T) {
+		t.Parallel()
+		cfg := config.Config{
+			Root:          "/home/simon/Code",
+			Default:       "{host}/{owner}/{repo}",
+			UseConfigOnly: true,
+			Profiles:      map[string]config.Profile{"private": {"user.email": "simon@example.test"}},
+			Rules:         []config.Rule{{Host: "github.com", Profile: "private"}},
+		}
+		rendered, err := gitconfig.Render(cfg, "/home/simon")
+		if err != nil {
+			t.Fatalf("Render() returned an unexpected error: %v", err)
+		}
+		includes := rendered[gitconfig.IncludePath("/home/simon")]
+
+		unconditional := strings.Index(includes, "[user]\n\tuseConfigOnly = true")
+		if unconditional == -1 {
+			t.Fatalf("Render() include file has no unconditional useConfigOnly block:\n%s", includes)
+		}
+		if firstIncludeIf := strings.Index(includes, "[includeIf"); firstIncludeIf != -1 && firstIncludeIf < unconditional {
+			t.Fatalf("Render() places the unconditional useConfigOnly block after an includeIf block:\n%s", includes)
+		}
+	})
+
+	t.Run("absent when the config opts out", func(t *testing.T) {
+		t.Parallel()
+		cfg := config.Config{
+			Root:          "/home/simon/Code",
+			Default:       "{host}/{owner}/{repo}",
+			UseConfigOnly: false,
+			Profiles:      map[string]config.Profile{"private": {"user.email": "simon@example.test"}},
+			Rules:         []config.Rule{{Host: "github.com", Profile: "private"}},
+		}
+		rendered, err := gitconfig.Render(cfg, "/home/simon")
+		if err != nil {
+			t.Fatalf("Render() returned an unexpected error: %v", err)
+		}
+		includes := rendered[gitconfig.IncludePath("/home/simon")]
+
+		if strings.Contains(includes, "useConfigOnly") {
+			t.Fatalf("Render() include file carries useConfigOnly despite opting out:\n%s", includes)
+		}
+	})
+
+	t.Run("present even with no profiles and no rules at all", func(t *testing.T) {
+		t.Parallel()
+		cfg := config.Config{Root: "/home/simon/Code", Default: "{host}/{owner}/{repo}", UseConfigOnly: true}
+		rendered, err := gitconfig.Render(cfg, "/home/simon")
+		if err != nil {
+			t.Fatalf("Render() returned an unexpected error: %v", err)
+		}
+		includes := rendered[gitconfig.IncludePath("/home/simon")]
+		if !strings.Contains(includes, "[user]\n\tuseConfigOnly = true") {
+			t.Fatalf("Render() with no profiles and no rules = %q, want the unconditional useConfigOnly block still present", includes)
+		}
+	})
+}
+
 func TestRender_GitdirBlock(t *testing.T) {
 	t.Parallel()
 
