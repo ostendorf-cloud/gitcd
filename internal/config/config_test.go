@@ -172,6 +172,176 @@ hosts:
 	})
 }
 
+func TestLoad_Profiles(t *testing.T) {
+	t.Run("no file ships useConfigOnly true and no profiles", func(t *testing.T) {
+		withHome(t)
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+		if !got.UseConfigOnly {
+			t.Fatal("Load().UseConfigOnly = false, want true when the file sets no useConfigOnly key")
+		}
+		if len(got.Profiles) != 0 {
+			t.Fatalf("Load().Profiles = %+v, want none", got.Profiles)
+		}
+	})
+
+	t.Run("loads profiles, rules and the default profile", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+profiles:
+  private:
+    user.name: Simon Ostendorf
+    user.email: "simon@example.test"
+  ado:
+    user.name: Simon Ostendorf
+    user.email: "simon@work.example.test"
+
+rules:
+  - host: dev.azure.com
+    profile: ado
+  - host: github.com
+    owner: ostendorf-cloud
+    profile: private
+
+defaultProfile: private
+`)
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+		if got.DefaultProfile != "private" {
+			t.Fatalf("Load().DefaultProfile = %q, want %q", got.DefaultProfile, "private")
+		}
+		if len(got.Rules) != 2 {
+			t.Fatalf("Load().Rules = %+v, want 2 entries", got.Rules)
+		}
+		private, ok := got.Profiles["private"]
+		if !ok {
+			t.Fatalf("Load().Profiles has no entry for %q: %+v", "private", got.Profiles)
+		}
+		if private["user.email"] != "simon@example.test" {
+			t.Fatalf("private profile user.email = %q, want %q", private["user.email"], "simon@example.test")
+		}
+	})
+
+	t.Run("useConfigOnly false is honoured", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), "useConfigOnly: false\n")
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+		if got.UseConfigOnly {
+			t.Fatal("Load().UseConfigOnly = true, want false when the file sets useConfigOnly: false")
+		}
+	})
+
+	t.Run("a profile key under the remote section is rejected", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+profiles:
+  private:
+    remote.origin.url: https://example.test/acme/widget.git
+`)
+
+		_, err := config.Load()
+		if !errors.Is(err, config.ErrInvalidProfile) {
+			t.Fatalf("Load() error = %v, want it to wrap config.ErrInvalidProfile", err)
+		}
+	})
+
+	t.Run("a profile key that is not a section.key pair is rejected", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+profiles:
+  private:
+    username: Simon Ostendorf
+`)
+
+		_, err := config.Load()
+		if !errors.Is(err, config.ErrInvalidProfile) {
+			t.Fatalf("Load() error = %v, want it to wrap config.ErrInvalidProfile", err)
+		}
+	})
+
+	t.Run("a rule with no host is rejected", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+profiles:
+  private:
+    user.email: "simon@example.test"
+
+rules:
+  - owner: ostendorf-cloud
+    profile: private
+`)
+
+		_, err := config.Load()
+		if !errors.Is(err, config.ErrInvalidProfile) {
+			t.Fatalf("Load() error = %v, want it to wrap config.ErrInvalidProfile", err)
+		}
+	})
+
+	t.Run("a rule naming a repo without an owner is rejected", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+profiles:
+  private:
+    user.email: "simon@example.test"
+
+rules:
+  - host: github.com
+    repo: widget
+    profile: private
+`)
+
+		_, err := config.Load()
+		if !errors.Is(err, config.ErrInvalidProfile) {
+			t.Fatalf("Load() error = %v, want it to wrap config.ErrInvalidProfile", err)
+		}
+	})
+
+	t.Run("a rule naming an undefined profile is rejected", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+rules:
+  - host: github.com
+    profile: missing
+`)
+
+		_, err := config.Load()
+		if !errors.Is(err, config.ErrInvalidProfile) {
+			t.Fatalf("Load() error = %v, want it to wrap config.ErrInvalidProfile", err)
+		}
+	})
+
+	t.Run("a defaultProfile naming an undefined profile is rejected", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), "defaultProfile: missing\n")
+
+		_, err := config.Load()
+		if !errors.Is(err, config.ErrInvalidProfile) {
+			t.Fatalf("Load() error = %v, want it to wrap config.ErrInvalidProfile", err)
+		}
+	})
+}
+
+func TestProfile_Keys(t *testing.T) {
+	t.Parallel()
+
+	p := config.Profile{"user.email": "[email protected]", "user.name": "Example", "gpg.format": "ssh"}
+	got := p.Keys()
+	want := []string{"gpg.format", "user.email", "user.name"}
+	if !equalStrings(got, want) {
+		t.Fatalf("Profile.Keys() = %v, want %v, sorted", got, want)
+	}
+}
+
 func TestConfig_AliasMap(t *testing.T) {
 	t.Parallel()
 
