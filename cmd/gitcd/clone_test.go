@@ -182,6 +182,59 @@ func TestRunClone_InvalidRemoteFails(t *testing.T) {
 	}
 }
 
+func TestRunClone_ProfilePinsTheIdentityAtCloneTime(t *testing.T) {
+	home := setupEnv(t)
+
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+profiles:
+  work:
+    user.name: Work Identity
+    user.email: work@example.test
+`)
+
+	source := filepath.Join(home, "upstream")
+	initRepository(t, source)
+	input := "https://example.test/acme/widget.git"
+	runGit(t, home, "config", "--global", "url.file://"+source+".insteadOf", input)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"clone", "--profile", "work", input}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("clone --profile work = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	dest := strings.TrimSpace(stdout.String())
+	if dest == "" {
+		t.Fatalf("clone --profile work printed nothing on stdout, stderr: %s", stderr.String())
+	}
+	got := runGitOutput(t, dest, "config", "--local", "--get", "user.email")
+	if got != "work@example.test" {
+		t.Fatalf("pinned user.email = %q, want %q", got, "work@example.test")
+	}
+
+	if !strings.Contains(stderr.String(), "user.email") {
+		t.Fatalf("clone --profile work stderr = %q, want it to report the effective identity read back", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "expected profile") {
+		t.Fatalf("clone --profile work stderr = %q, want it to report the expected profile through the resolver seam", stderr.String())
+	}
+}
+
+func TestRunClone_UnknownProfileFails(t *testing.T) {
+	home := setupEnv(t)
+	source := filepath.Join(home, "upstream")
+	initRepository(t, source)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"clone", "--profile", "missing", source}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("clone --profile missing = 0, want a failure for an undefined profile")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("clone --profile missing wrote to stdout: %q", stdout.String())
+	}
+}
+
 func TestRunClone_RequiresExactlyOneArgument(t *testing.T) {
 	setupEnv(t)
 

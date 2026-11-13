@@ -24,6 +24,9 @@ Usage:
 Commands:
   clone        clone a repository into its rendered path, printing the path
   path         resolve a repository name or host/owner/repo to its path
+  init         add the identity profile include to the global git config
+  apply        render and write the identity profile files
+  profile      pin, remove or inspect a repository's identity profile
   shell-init   print the shell integration snippet for zsh, bash or fish
   version      print the version
 
@@ -47,6 +50,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runClone(args[1:], stdout, stderr)
 	case "path":
 		return runPath(args[1:], stdout, stderr)
+	case "init":
+		return runInit(args[1:], stdout, stderr)
+	case "apply":
+		return runApply(args[1:], stdout, stderr)
+	case "profile":
+		return runProfile(args[1:], stdout, stderr)
 	case "shell-init":
 		return runShellInit(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
