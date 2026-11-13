@@ -116,6 +116,58 @@ func TestRunClone_ExistingTargetWithADifferentRemoteFailsNamingBoth(t *testing.T
 	}
 }
 
+// TestRunClone_AzureDevOpsDefaultLayoutKeepsTheProjectAndAgreesAcrossProtocols
+// guards against the default configuration, with no "~/.gitcd.yaml" at
+// all, silently dropping the project segment and rendering the SSH and
+// HTTPS forms of one Azure DevOps repository into two different trees.
+func TestRunClone_AzureDevOpsDefaultLayoutKeepsTheProjectAndAgreesAcrossProtocols(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	want := filepath.Join(root, "dev.azure.com", "myorg", "myproject", "myrepo")
+
+	var sshStdout, sshStderr bytes.Buffer
+	sshCode := run(
+		[]string{"clone", "--dry-run", "git@ssh.dev.azure.com:v3/myorg/myproject/myrepo"}, &sshStdout, &sshStderr,
+	)
+	if sshCode != 0 {
+		t.Fatalf("clone --dry-run (ssh) = %d, want 0, stderr: %s", sshCode, sshStderr.String())
+	}
+	if got := strings.TrimSpace(sshStdout.String()); got != want {
+		t.Fatalf("clone --dry-run (ssh) stdout = %q, want %q", got, want)
+	}
+
+	var httpsStdout, httpsStderr bytes.Buffer
+	httpsCode := run(
+		[]string{"clone", "--dry-run", "https://dev.azure.com/myorg/myproject/_git/myrepo"}, &httpsStdout, &httpsStderr,
+	)
+	if httpsCode != 0 {
+		t.Fatalf("clone --dry-run (https) = %d, want 0, stderr: %s", httpsCode, httpsStderr.String())
+	}
+	if got := strings.TrimSpace(httpsStdout.String()); got != want {
+		t.Fatalf("clone --dry-run (https) stdout = %q, want %q", got, want)
+	}
+}
+
+// TestRunClone_AzureDevOpsBareShorthandRoundTripsTheRenderedPath guards
+// against "gitcd clone" rejecting the exact string its own
+// "{host}/{org}/{project}/{repo}" layout renders, which made the rendered
+// path unreadable by the command that rendered it.
+func TestRunClone_AzureDevOpsBareShorthandRoundTripsTheRenderedPath(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"clone", "--dry-run", "dev.azure.com/myorg/myproject/myrepo"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("clone --dry-run (bare shorthand) = %d, want 0, stderr: %s", code, stderr.String())
+	}
+	want := filepath.Join(root, "dev.azure.com", "myorg", "myproject", "myrepo")
+	if got := strings.TrimSpace(stdout.String()); got != want {
+		t.Fatalf("clone --dry-run (bare shorthand) stdout = %q, want %q", got, want)
+	}
+}
+
 func TestRunClone_InvalidRemoteFails(t *testing.T) {
 	setupEnv(t)
 

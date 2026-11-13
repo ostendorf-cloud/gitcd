@@ -97,6 +97,18 @@ func TestParse(t *testing.T) {
 			input:   "https://dev.azure.com/acme-corp/_git/widget-repo",
 			wantErr: true,
 		},
+		{
+			name:  "azure devops bare shorthand round trips the layout's own rendered path",
+			input: "dev.azure.com/myorg/myproject/myrepo",
+			want: remote.Remote{
+				Host: "dev.azure.com", Owner: "myorg", Project: "myproject", Repo: "myrepo",
+			},
+		},
+		{
+			name:    "an azure devops https url without the bare shorthand still requires _git",
+			input:   "https://dev.azure.com/myorg/myproject/myrepo",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

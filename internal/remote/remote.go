@@ -69,7 +69,7 @@ func Parse(input string, aliases map[string]string) (Remote, error) {
 		if sshForm {
 			segments = segments[1:]
 		}
-		return parseAzure(host, segments, sshForm, trimmed)
+		return parseAzure(host, segments, sshForm, IsShorthand(trimmed), trimmed)
 	}
 
 	if len(segments) < 2 {
@@ -186,15 +186,24 @@ func isAzureDevOps(host, rawHost string) bool {
 }
 
 // parseAzure reads the Azure DevOps SSH path "{org}/{project}/{repo}" when
-// sshForm is set, the leading "v3" segment already stripped by the caller,
-// or otherwise the HTTPS path "{org}/{project}/_git/{repo}" from segments.
-// The "v3" prefix is what tells the two shapes apart: without it, a path
-// three segments long is malformed rather than guessed at as SSH shaped.
-func parseAzure(host string, segments []string, sshForm bool, input string) (Remote, error) {
+// sshForm is set, the leading "v3" segment already stripped by the caller;
+// otherwise the HTTPS path "{org}/{project}/_git/{repo}" from segments, or,
+// when input was the bare "host/org/project/repo" shorthand, the same three
+// segments with no "_git" to require, since the shorthand has no room to
+// carry it and that is exactly what the "{host}/{org}/{project}/{repo}"
+// layout renders back out: a caller round tripping its own rendered path
+// must be able to read it back. The "v3" prefix is what tells the SSH and
+// HTTPS shapes apart otherwise: without it, a path three segments long is
+// malformed rather than guessed at as SSH shaped, unless it was the
+// shorthand to begin with.
+func parseAzure(host string, segments []string, sshForm, shorthand bool, input string) (Remote, error) {
 	if sshForm {
 		if len(segments) != 3 {
 			return Remote{}, fmt.Errorf("remote: %q is not a recognised Azure DevOps SSH path", input)
 		}
+		return Remote{Host: host, Owner: segments[0], Project: segments[1], Repo: segments[2]}, nil
+	}
+	if shorthand && len(segments) == 3 {
 		return Remote{Host: host, Owner: segments[0], Project: segments[1], Repo: segments[2]}, nil
 	}
 	if len(segments) != 4 || segments[2] != "_git" {

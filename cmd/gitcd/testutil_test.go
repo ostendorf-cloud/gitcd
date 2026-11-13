@@ -57,6 +57,41 @@ func initRepository(t *testing.T, dir string) {
 	runGit(t, dir, "commit", "-m", "add README")
 }
 
+// goEnv pins the toolchain's own GOPATH, GOCACHE and GOMODCACHE, read once
+// here before any test's setupEnv can point HOME at a fresh temporary
+// directory. buildGitcd needs them read before that happens: "go build"
+// run with a temporary HOME would otherwise compute a fresh, empty module
+// cache from it and try to repopulate it over the network.
+var goEnv = resolveGoEnv()
+
+func resolveGoEnv() []string {
+	var env []string
+	for _, key := range []string{"GOPATH", "GOCACHE", "GOMODCACHE"} {
+		cmd := exec.CommandContext(context.Background(), "go", "env", key)
+		out, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+		env = append(env, key+"="+strings.TrimSpace(string(out)))
+	}
+	return env
+}
+
+// buildGitcd compiles the real gitcd binary into a fresh temporary
+// directory and returns its path. A test needs the real binary, rather
+// than calling run directly, only when it observes gitcd from outside the
+// test binary itself, such as a shell wrapper's own "command gitcd" call.
+func buildGitcd(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "gitcd")
+	cmd := exec.CommandContext(context.Background(), "go", "build", "-o", bin, ".")
+	cmd.Env = append(os.Environ(), goEnv...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build gitcd: %v: %s", err, out)
+	}
+	return bin
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

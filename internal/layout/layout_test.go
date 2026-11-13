@@ -45,6 +45,14 @@ func TestRender(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "a template with no placeholder for a field the remote carries fails",
+			tmpl: "{host}/{owner}/{repo}",
+			remote: remote.Remote{
+				Host: "dev.azure.com", Owner: "acme-corp", Project: "Widget", Repo: "widget-repo",
+			},
+			wantErr: true,
+		},
+		{
 			name:    "an unknown placeholder fails",
 			tmpl:    "{host}/{owner}/{branch}",
 			remote:  remote.Remote{Host: "github.com", Owner: "acme", Repo: "widget"},

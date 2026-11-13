@@ -26,6 +26,14 @@ const DefaultRoot = "~/Code"
 // "layout" key, and to every host when "layout.default" is left out.
 const DefaultLayout = "{host}/{owner}/{repo}"
 
+// defaultAzureLayout is dev.azure.com's own built in layout, carrying the
+// project segment DefaultLayout has no placeholder for. remote.Parse
+// recognises Azure DevOps unconditionally, so Default ships a matching
+// entry: without one, a host with no configuration file falls back to
+// DefaultLayout, which drops the project and renders the SSH and HTTPS
+// forms of one repository into two different paths.
+const defaultAzureLayout = "{host}/{org}/{project}/{repo}"
+
 // ErrUnknownKey is wrapped into the error Load returns when the
 // configuration file carries a key this package does not recognise.
 var ErrUnknownKey = errors.New("config: unknown key")
@@ -64,7 +72,12 @@ func Default() Config {
 	return Config{
 		Root:    DefaultRoot,
 		Default: DefaultLayout,
-		Hosts:   map[string]Host{},
+		Hosts: map[string]Host{
+			"dev.azure.com": {
+				Layout:  defaultAzureLayout,
+				Aliases: []string{"ssh.dev.azure.com", "vs-ssh.visualstudio.com"},
+			},
+		},
 	}
 }
 

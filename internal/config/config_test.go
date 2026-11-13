@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
@@ -34,8 +35,31 @@ func TestLoad(t *testing.T) {
 		want := config.Default()
 		want.Root, _ = os.UserHomeDir()
 		want.Root = filepath.Join(want.Root, "Code")
-		if got.Root != want.Root || got.Default != want.Default || len(got.Hosts) != 0 {
+		if got.Root != want.Root || got.Default != want.Default {
 			t.Fatalf("Load() = %+v, want %+v", got, want)
+		}
+		if !reflect.DeepEqual(got.Hosts, want.Hosts) {
+			t.Fatalf("Load().Hosts = %+v, want %+v", got.Hosts, want.Hosts)
+		}
+	})
+
+	t.Run("no configuration file still ships the azure devops default layout and aliases", func(t *testing.T) {
+		withHome(t)
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+
+		azure, ok := got.Hosts["dev.azure.com"]
+		if !ok {
+			t.Fatalf("Load().Hosts has no entry for dev.azure.com, but remote.Parse recognises it unconditionally: %+v", got.Hosts)
+		}
+		if azure.Layout != "{host}/{org}/{project}/{repo}" {
+			t.Fatalf("default dev.azure.com layout = %q, want the four segment layout carrying the project", azure.Layout)
+		}
+		if want := []string{"ssh.dev.azure.com", "vs-ssh.visualstudio.com"}; !equalStrings(azure.Aliases, want) {
+			t.Fatalf("default dev.azure.com aliases = %v, want %v", azure.Aliases, want)
 		}
 	})
 

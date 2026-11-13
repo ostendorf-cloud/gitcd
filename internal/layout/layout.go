@@ -30,9 +30,12 @@ func fieldName(name string) string {
 
 // Render substitutes every placeholder in tmpl with the matching field of
 // r and returns the resulting path, "/" separated and without a leading or
-// trailing slash. It fails on an unknown placeholder or one whose field is
-// empty on r, since an empty segment would otherwise collapse two
-// slashes together.
+// trailing slash. It fails on an unknown placeholder, on one whose field is
+// empty on r since an empty segment would otherwise collapse two slashes
+// together, and on the reverse: a field r carries that tmpl has no
+// placeholder for, since that field would otherwise be silently dropped
+// from the rendered path, which is how two different remotes can end up
+// sharing one path.
 func Render(tmpl string, r remote.Remote) (string, error) {
 	fields := map[string]string{
 		"host":    r.Host,
@@ -41,9 +44,11 @@ func Render(tmpl string, r remote.Remote) (string, error) {
 		"repo":    r.Repo,
 	}
 
+	used := map[string]bool{}
 	var missing, unknown string
 	result := placeholderPattern.ReplaceAllStringFunc(tmpl, func(match string) string {
 		name := fieldName(placeholderPattern.FindStringSubmatch(match)[1])
+		used[name] = true
 		value, known := fields[name]
 		if !known {
 			unknown = name
@@ -59,6 +64,9 @@ func Render(tmpl string, r remote.Remote) (string, error) {
 	}
 	if missing != "" {
 		return "", fmt.Errorf("layout: template %q needs %q, which this remote has none of", tmpl, missing)
+	}
+	if r.Project != "" && !used["project"] {
+		return "", fmt.Errorf("layout: template %q has no %q placeholder, which this remote carries", tmpl, "project")
 	}
 
 	return strings.Trim(result, "/"), nil
@@ -78,6 +86,9 @@ type Template struct {
 // template before the default, since a host specific template is the more
 // precise match. An owner placeholder absorbs any path segment a fixed
 // placeholder does not claim, so a GitLab subgroup owner round trips.
+//
+// No caller exists yet: the doctor and adopt milestone (issue #4) consumes
+// it, to detect a repository sitting at a path the layout would not render.
 func ParsePath(path string, templates []Template, defaultTemplate string) (remote.Remote, error) {
 	trimmed := strings.Trim(path, "/")
 	if trimmed == "" {
