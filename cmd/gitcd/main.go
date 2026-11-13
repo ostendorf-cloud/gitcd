@@ -54,7 +54,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "path":
 		return runPath(args[1:], stdout, stderr)
 	case "init":
-		return runInit(args[1:], stdout, stderr)
+		return runInit(args[1:], os.Stdin, stdout, stderr)
 	case "apply":
 		return runApply(args[1:], stdout, stderr)
 	case "profile":
