@@ -32,10 +32,11 @@ func fieldName(name string) string {
 // r and returns the resulting path, "/" separated and without a leading or
 // trailing slash. It fails on an unknown placeholder, on one whose field is
 // empty on r since an empty segment would otherwise collapse two slashes
-// together, and on the reverse: a field r carries that tmpl has no
-// placeholder for, since that field would otherwise be silently dropped
-// from the rendered path, which is how two different remotes can end up
-// sharing one path.
+// together, on the reverse: a field r carries that tmpl has no placeholder
+// for, since that field would otherwise be silently dropped from the
+// rendered path, which is how two different remotes can end up sharing one
+// path, and on a field whose value cannot name a directory inside the
+// root, checked by validateField.
 func Render(tmpl string, r remote.Remote) (string, error) {
 	fields := map[string]string{
 		"host":    r.Host,
@@ -46,6 +47,7 @@ func Render(tmpl string, r remote.Remote) (string, error) {
 
 	used := map[string]bool{}
 	var missing, unknown string
+	var invalid error
 	result := placeholderPattern.ReplaceAllStringFunc(tmpl, func(match string) string {
 		name := fieldName(placeholderPattern.FindStringSubmatch(match)[1])
 		used[name] = true
@@ -56,6 +58,10 @@ func Render(tmpl string, r remote.Remote) (string, error) {
 		}
 		if value == "" {
 			missing = name
+			return value
+		}
+		if err := validateField(name, value); err != nil && invalid == nil {
+			invalid = err
 		}
 		return value
 	})
@@ -65,11 +71,63 @@ func Render(tmpl string, r remote.Remote) (string, error) {
 	if missing != "" {
 		return "", fmt.Errorf("layout: template %q needs %q, which this remote has none of", tmpl, missing)
 	}
+	if invalid != nil {
+		return "", invalid
+	}
 	if r.Project != "" && !used["project"] {
 		return "", fmt.Errorf("layout: template %q has no %q placeholder, which this remote carries", tmpl, "project")
 	}
 
 	return strings.Trim(result, "/"), nil
+}
+
+// validateField rejects value when it cannot name one or more directories
+// inside the root. owner alone may carry several components, split on
+// "/", for a GitLab subgroup; every other field must be the single
+// component it names on its own, so a "/" anywhere inside it is rejected
+// the same as it would be inside one of owner's own components.
+//
+// A "\" is rejected everywhere too, on every host operating system, not
+// only on Windows: this package and internal/remote always build and
+// compare a path as a literal "/" separated string, never through
+// path/filepath, so the same rendered value is read back on whichever
+// platform a later caller runs this binary on. A component that carries
+// a "\" would only turn into a second, separate directory once that
+// string reaches a Windows path API, not here and not on a POSIX host,
+// so rejecting it has to happen before that difference can matter, for
+// every build of this binary alike.
+func validateField(field, value string) error {
+	segments := []string{value}
+	if field == "owner" {
+		segments = strings.Split(value, "/")
+	}
+	for _, seg := range segments {
+		if err := validateSegment(field, seg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateSegment rejects seg, one component of field, when it is empty,
+// names the current or a parent directory, is itself absolute, or
+// otherwise carries a "/" or a "\": none of those can name one directory
+// inside the root the way an ordinary component does.
+func validateSegment(field, seg string) error {
+	switch {
+	case seg == "":
+		return fmt.Errorf("layout: %s has an empty path component", field)
+	case seg == ".":
+		return fmt.Errorf("layout: %s has a path component naming the current directory: %q", field, seg)
+	case seg == "..":
+		return fmt.Errorf("layout: %s has a path component naming a parent directory: %q", field, seg)
+	case strings.HasPrefix(seg, "/") || strings.HasPrefix(seg, "\\"):
+		return fmt.Errorf("layout: %s has an absolute path component: %q", field, seg)
+	case strings.ContainsAny(seg, "/\\"):
+		return fmt.Errorf("layout: %s has a path component carrying a path separator: %q", field, seg)
+	default:
+		return nil
+	}
 }
 
 // Template names one host's path template, "" for the default applied to
@@ -89,6 +147,14 @@ type Template struct {
 //
 // No caller exists yet: the doctor and adopt milestone (issue #4) consumes
 // it, to detect a repository sitting at a path the layout would not render.
+//
+// ParsePath does not run the same component check Render does: path is
+// meant to come from a walk of an existing directory tree under the
+// configured root, where a real directory entry named "." or ".." cannot
+// occur, and the Remote this returns never becomes a write target on its
+// own, only a value compared back against Render's own output, which
+// still rejects it there if the comparison ever is attempted on a path a
+// walk could not have produced.
 func ParsePath(path string, templates []Template, defaultTemplate string) (remote.Remote, error) {
 	trimmed := strings.Trim(path, "/")
 	if trimmed == "" {
