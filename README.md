@@ -93,6 +93,10 @@ and `.`, because a name is also what you type at `--profile work_eu`. It require
 digit at each end, because a leading `.` would hide the rendered file and a trailing `.` or
 space is silently stripped by Windows, which would render two distinct profiles to one file.
 
+Two profile names that differ only in case are rejected together. A name becomes a file name,
+and on a case insensitive filesystem `work` and `Work` are one file, so one profile's identity
+would quietly replace the other's.
+
 A rejected name fails the whole file at load time, before any rule is looked at, so a rule
 naming that profile never resolves and no command runs against a partly valid configuration.
 
@@ -113,14 +117,34 @@ reads the remote URL, so a profile setting one would decide its own condition.
 
 ### Keys a profile carries only when named
 
-Some git config keys hand git a command to run, take over a credential prompt, or change which
-URL git contacts. A profile is picked automatically per remote, so these are rejected unless
-`allowUnsafeKeys` names the key:
+Some git config keys hand git a command to run, take over a credential prompt, change which URL
+git contacts, or decide what git trusts. A profile is picked automatically per remote, so these
+are rejected unless `allowUnsafeKeys` names the key. They are described as families, not as a
+list, and the subsection never decides a match, so `diff.command` and `diff.<driver>.command`
+are the same setting to the gate:
 
-- `core.sshCommand`, `core.pager`, `core.editor`, `core.fsmonitor`
-- every key under `credential`
-- `url.<base>.insteadOf` and `url.<base>.pushInsteadOf`
-- any key whose name is `process` or `hook`, under any section
+- a key name ending in `askPass`, `clean`, `cmd`, `command`, `driver`, `editor`, `external`,
+  `hook`, `hooksPath`, `pager`, `process`, `program`, `proxy`, `smudge`, `templateDir`,
+  `textconv` or `variant`, under any section
+- the key names `allow`, `destination`, `directory`, `fsmonitor`, `insteadOf` and
+  `pushInsteadOf`, under any section
+- every key under `alias`, `credential`, `difftool`, `mergetool`, `pager`, `protocol`, `safe`,
+  `trace2` and `url`
+- every key under `core` except the working tree settings: `abbrev`, `autocrlf`, `bare`,
+  `bigFileThreshold`, `commentChar`, `compression`, `eol`, `excludesFile`, `fileMode`,
+  `ignoreCase`, `logAllRefUpdates`, `looseCompression`, `precomposeUnicode`, `quotePath`,
+  `safeCRLF`, `sharedRepository`, `symlinks`, `trustCtime`, `untrackedCache` and `whitespace`
+
+`core` is listed the other way round on purpose. Its keys run from `core.autocrlf`, which any
+profile may set, to `core.sshCommand` and `core.hooksPath`, which none may set unannounced, and
+nothing in the spelling tells the two apart. Naming what a profile legitimately sets puts a key
+git adds later on the restricted side by default.
+
+The signing keys a profile exists to carry are not restricted: `user.name`, `user.email`,
+`user.signingKey`, `gpg.format`, `gpg.ssh.allowedSignersFile`, `commit.gpgsign` and
+`tag.gpgsign`. `gpg.format` selects a format and names no command; the program for each format
+is `gpg.<format>.program`, which is restricted. `gpg.ssh.allowedSignersFile` is a file git reads
+to verify a signature, and decides no identity.
 
 ```yaml
 allowUnsafeKeys:
@@ -136,6 +160,18 @@ Each entry names one key, matched the way git matches a key: the section and the
 case-insensitively, the subsection exactly. A wildcard is not accepted, and an entry naming a
 key that needs no opt in is rejected rather than ignored. `doctor` reports every key applied
 this way, so the choice stays visible.
+
+### What a host alias and a layout may be
+
+A host's `aliases` are written into the generated conditions in the same position the rule's own
+host occupies, so each is held to the same terms as a rule host: no glob, no quote, no path
+separator. An alias of `*` would otherwise apply an owner scoped rule on every host.
+
+A layout template is a path, so unlike a rule field it carries `/` between its segments and
+`{host}` style placeholders inside them. Each segment may hold placeholders from the set
+`{host}`, `{owner}`, `{org}`, `{project}` and `{repo}`, plus letters, digits, `.`, `-` and `_`.
+A glob, a quote and a `.` or `..` segment are rejected: a glob widens the generated condition
+past the rule that named it, and an upward segment roots it outside the configured root.
 
 ### What a rule field may be
 
