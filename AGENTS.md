@@ -73,4 +73,6 @@ task run -- clone github.com/acme/widget   # run the CLI from source
 
 ## Deviations
 
-- None.
+- yamllint's line-length limit is 140, not the default 120. A pinned reusable workflow
+  reference needs the full line for its commit digest and version comment. Most of the
+  organisation's repositories already run at 140.
