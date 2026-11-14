@@ -19,6 +19,8 @@ import (
 	"github.com/ostendorf-cloud/gitcd/internal/doctor"
 	"github.com/ostendorf-cloud/gitcd/internal/git"
 	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
+	"github.com/ostendorf-cloud/gitcd/internal/layout"
+	"github.com/ostendorf-cloud/gitcd/internal/remote"
 )
 
 // doctorOutput is the shape "gitcd doctor --json" encodes: both
@@ -93,7 +95,16 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 
 	var fixed, outstanding []doctor.Finding
 	if *fix {
-		fixed, outstanding = applyFixes(findings, cfg, home, logger, stdout, stderr, *dryRun)
+		// "--fix" prints a progress line per repair it makes. With
+		// "--json", stdout must carry nothing but the single encoded
+		// object a caller pipes to "jq", so every progress line goes to
+		// stderr instead, exactly where every other log line already
+		// goes.
+		progress := stdout
+		if *jsonOutput {
+			progress = stderr
+		}
+		fixed, outstanding = applyFixes(findings, cfg, home, logger, progress, stderr, *dryRun)
 	} else {
 		outstanding = findings
 	}
@@ -115,8 +126,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 }
 
 // collectFindings runs every check doctor performs: one pass over
-// discoverRepos's walk of cfg.Root, the managed file comparison, and the
-// global git configuration checks.
+// discoverRepos's walk of cfg.Root, the ancestor case conflict check that
+// pass also makes possible, the managed file comparison, and the global
+// git configuration checks.
 func collectFindings(ctx context.Context, cfg config.Config, home string, logger *slog.Logger, stderr io.Writer) ([]doctor.Finding, error) {
 	var findings []doctor.Finding
 
@@ -125,6 +137,8 @@ func collectFindings(ctx context.Context, cfg config.Config, home string, logger
 		return nil, fmt.Errorf("search %s: %w", cfg.Root, err)
 	}
 	logger.Debug("discovered repositories", "root", cfg.Root, "count", len(paths))
+
+	var repoPaths []doctor.RepoPath
 	for _, path := range paths {
 		name := repoName(cfg.Root, path)
 		repoFindings, err := doctor.CheckRepo(ctx, cfg, home, name, path)
@@ -137,6 +151,27 @@ func collectFindings(ctx context.Context, cfg config.Config, home string, logger
 			continue
 		}
 		findings = append(findings, repoFindings...)
+
+		// want is computed again here, rather than threaded out of
+		// CheckRepo, so every repository, matched or not, feeds
+		// CheckAncestorCaseConflicts below: a repository already sitting
+		// at the path its own remote implies carries no finding of its
+		// own, yet is exactly the one a careless ancestor rename would
+		// un-place, so it still has to be in this list.
+		want, err := wantPath(ctx, cfg, path)
+		if err != nil {
+			continue
+		}
+		repoPaths = append(repoPaths, doctor.RepoPath{Repo: name, Path: path, Want: want})
+	}
+
+	if conflicts := doctor.CheckAncestorCaseConflicts(repoPaths); len(conflicts) > 0 {
+		contested := make([]string, 0, len(conflicts))
+		for _, c := range conflicts {
+			contested = append(contested, c.Path)
+		}
+		findings = filterContestedPathCase(findings, contested)
+		findings = append(findings, conflicts...)
 	}
 
 	managedFindings, err := doctor.CheckManagedFiles(cfg, home)
@@ -153,7 +188,8 @@ func collectFindings(ctx context.Context, cfg config.Config, home string, logger
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read %s: %w", globalPath, err)
 	}
-	globalFindings, err := doctor.CheckGlobal(globalContent, globalPath, defaultMovedProfileName)
+	_, movedProfileExists := cfg.Profiles[defaultMovedProfileName]
+	globalFindings, err := doctor.CheckGlobal(globalContent, globalPath, defaultMovedProfileName, movedProfileExists)
 	if err != nil {
 		return nil, err
 	}
@@ -195,15 +231,17 @@ func applyFixes(
 		case (f.Kind == doctor.KindManagedFileMissing || f.Kind == doctor.KindManagedFileStale) && managedWritten:
 			fixed = append(fixed, f)
 		case f.Kind == doctor.KindPathCase && dryRun:
-			fmt.Fprintf(stdout, "would rename %s to %s\n", f.Path, f.WantPath)
+			oldAncestor, newAncestor := doctor.FirstDifferingSegment(f.Path, f.WantPath)
+			fmt.Fprintf(stdout, "would rename %s to %s\n", oldAncestor, newAncestor)
 			outstanding = append(outstanding, f)
 		case f.Kind == doctor.KindPathCase:
-			if err := renameCaseOnly(f.Path, f.WantPath); err != nil {
+			oldAncestor, newAncestor, err := renameCaseOnly(f.Path, f.WantPath)
+			if err != nil {
 				fmt.Fprintf(stderr, "gitcd doctor: %v\n", err)
 				outstanding = append(outstanding, f)
 				continue
 			}
-			fmt.Fprintf(stdout, "renamed %s to %s\n", f.Path, f.WantPath)
+			fmt.Fprintf(stdout, "renamed %s to %s\n", oldAncestor, newAncestor)
 			fixed = append(fixed, f)
 		default:
 			outstanding = append(outstanding, f)
@@ -229,60 +267,90 @@ func rerenderManagedFiles(cfg config.Config, home string, logger *slog.Logger, s
 // leaf directory, a mis-cased owner segment for instance: it renames the
 // topmost segment that actually differs, carrying everything below it
 // along in the same move, rather than only the leaf, which would leave
-// a mis-cased ancestor untouched. The move goes through a sibling
-// temporary name: a case insensitive but case preserving filesystem, the
-// common case on macOS, treats a direct rename between two spellings of
-// the same name as a no-op, unlike a case sensitive one, so a plain
-// two-argument rename cannot be relied on to force the change on every
-// filesystem alike.
+// a mis-cased ancestor untouched, and returns that ancestor pair, the
+// directories actually renamed, so a caller reports what really moved
+// rather than the repository's own path. The move goes through a
+// sibling temporary name: a case insensitive but case preserving
+// filesystem, the common case on macOS, treats a direct rename between
+// two spellings of the same name as a no-op, unlike a case sensitive
+// one, so a plain two-argument rename cannot be relied on to force the
+// change on every filesystem alike.
 //
 // When the topmost differing ancestor no longer exists at its old path
 // but already exists at the new one, it was already renamed by an
 // earlier call in the same "doctor --fix" run, fixing a sibling
 // repository under the same mis-cased ancestor: this call is then a
 // no-op rather than an error.
-func renameCaseOnly(oldPath, newPath string) error {
-	oldAncestor, newAncestor := firstDifferingSegment(oldPath, newPath)
+func renameCaseOnly(oldPath, newPath string) (oldAncestor, newAncestor string, err error) {
+	oldAncestor, newAncestor = doctor.FirstDifferingSegment(oldPath, newPath)
 	if oldAncestor == newAncestor {
-		return nil
+		return oldAncestor, newAncestor, nil
 	}
-	if _, err := os.Stat(oldAncestor); errors.Is(err, os.ErrNotExist) {
-		if _, err := os.Stat(newAncestor); err == nil {
-			return nil
+	if _, statErr := os.Stat(oldAncestor); errors.Is(statErr, os.ErrNotExist) {
+		if _, statErr := os.Stat(newAncestor); statErr == nil {
+			return oldAncestor, newAncestor, nil
 		}
 	}
 
 	tmp := oldAncestor + ".gitcd-doctor-rename-tmp"
 	if err := os.Rename(oldAncestor, tmp); err != nil {
-		return fmt.Errorf("rename %s to a temporary name: %w", oldAncestor, err)
+		return oldAncestor, newAncestor, fmt.Errorf("rename %s to a temporary name: %w", oldAncestor, err)
 	}
 	if err := os.Rename(tmp, newAncestor); err != nil {
 		// Best effort restore, so a failed second hop does not leave the
 		// repository sitting at an unexpected temporary name.
 		_ = os.Rename(tmp, oldAncestor)
-		return fmt.Errorf("rename %s to %s: %w", oldAncestor, newAncestor, err)
+		return oldAncestor, newAncestor, fmt.Errorf("rename %s to %s: %w", oldAncestor, newAncestor, err)
 	}
-	return nil
+	return oldAncestor, newAncestor, nil
 }
 
-// firstDifferingSegment walks oldPath and newPath component by
-// component and returns the path of the first (topmost) component at
-// which they differ, in each of the two inputs, so a caller can rename
-// exactly that directory and carry everything below it along in one
-// move. Both return values equal oldPath and newPath themselves when
-// the two share no common prefix at all.
-func firstDifferingSegment(oldPath, newPath string) (string, string) {
-	oldSegs := strings.Split(filepath.Clean(oldPath), string(filepath.Separator))
-	newSegs := strings.Split(filepath.Clean(newPath), string(filepath.Separator))
+// wantPath renders the path the configured layout would place path's own
+// repository at, read from its remote directly rather than through
+// doctor.CheckRepo's own profile.Inspect, which this package's
+// CheckAncestorCaseConflicts call does not need the fuller identity
+// state Inspect also resolves for.
+func wantPath(ctx context.Context, cfg config.Config, path string) (string, error) {
+	remoteURL, err := git.RemoteURL(ctx, path)
+	if err != nil {
+		return "", fmt.Errorf("read the origin remote of %s: %w", path, err)
+	}
+	r, err := remote.Parse(remoteURL, cfg.AliasMap())
+	if err != nil {
+		return "", err
+	}
+	rel, err := layout.Render(cfg.LayoutFor(r.Host), r)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cfg.Root, rel), nil
+}
 
-	i := 0
-	for i < len(oldSegs) && i < len(newSegs) && oldSegs[i] == newSegs[i] {
-		i++
+// filterContestedPathCase drops every KindPathCase finding in findings
+// whose own path sits under one of contested, the ancestor directories
+// CheckAncestorCaseConflicts found two or more repositories disagreeing
+// about: a KindAncestorCaseConflict finding replaces it instead, so
+// "doctor --fix" never attempts the rename a KindPathCase finding would
+// otherwise have it try.
+func filterContestedPathCase(findings []doctor.Finding, contested []string) []doctor.Finding {
+	kept := make([]doctor.Finding, 0, len(findings))
+	for _, f := range findings {
+		if f.Kind == doctor.KindPathCase && underAny(f.Path, contested) {
+			continue
+		}
+		kept = append(kept, f)
 	}
-	if i >= len(oldSegs) || i >= len(newSegs) {
-		return oldPath, newPath
+	return kept
+}
+
+// underAny reports whether path equals, or sits under, any of ancestors.
+func underAny(path string, ancestors []string) bool {
+	for _, a := range ancestors {
+		if path == a || strings.HasPrefix(path, a+string(filepath.Separator)) {
+			return true
+		}
 	}
-	return strings.Join(oldSegs[:i+1], string(filepath.Separator)), strings.Join(newSegs[:i+1], string(filepath.Separator))
+	return false
 }
 
 // writeDoctorReport renders doctor's text report: both configuration

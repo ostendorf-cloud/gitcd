@@ -190,6 +190,128 @@ rules:
 	}
 }
 
+func TestRunAdopt_RefusesALinkedWorktree(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	mainCheckout := filepath.Join(home, "elsewhere", "widget")
+	initRepository(t, mainCheckout)
+	runGit(t, mainCheckout, "remote", "add", "origin", "https://github.com/acme/widget.git")
+
+	worktree := filepath.Join(home, "elsewhere", "widget-feat")
+	runGit(t, mainCheckout, "worktree", "add", worktree, "-b", "feat")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"adopt", "--yes", worktree}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("adopt on a linked worktree = 0, want a refusal")
+	}
+	if !strings.Contains(stderr.String(), "linked worktree") {
+		t.Fatalf("adopt stderr = %q, want it to name the linked worktree", stderr.String())
+	}
+	if _, err := os.Stat(worktree); err != nil {
+		t.Fatalf("adopt moved the linked worktree despite refusing: %v", err)
+	}
+	// The pair must still work as git itself understands it: a worktree
+	// adopt silently broke would fail this, exactly the symptom the
+	// review's own reproduction demonstrated.
+	runGit(t, worktree, "rev-parse", "--is-inside-work-tree")
+}
+
+func TestRunAdopt_RefusesAMainCheckoutWithALinkedWorktree(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	mainCheckout := filepath.Join(home, "elsewhere", "widget")
+	initRepository(t, mainCheckout)
+	runGit(t, mainCheckout, "remote", "add", "origin", "https://github.com/acme/widget.git")
+
+	worktree := filepath.Join(home, "elsewhere", "widget-feat")
+	runGit(t, mainCheckout, "worktree", "add", worktree, "-b", "feat")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"adopt", "--yes", mainCheckout}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("adopt on a main checkout with a linked worktree = 0, want a refusal")
+	}
+	if !strings.Contains(stderr.String(), "linked worktree") {
+		t.Fatalf("adopt stderr = %q, want it to name the linked worktree", stderr.String())
+	}
+	if _, err := os.Stat(mainCheckout); err != nil {
+		t.Fatalf("adopt moved the main checkout despite refusing: %v", err)
+	}
+	// The pair must still work as git itself understands it: a main
+	// checkout moved out from under its worktree without repairing the
+	// link would fail this, exactly the symptom the review's own
+	// reproduction demonstrated.
+	runGit(t, worktree, "rev-parse", "--is-inside-work-tree")
+}
+
+func TestRunAdopt_RefusesMovingIntoItselfAndLeavesNoDirectoryBehind(t *testing.T) {
+	home := setupEnv(t)
+	// The repository itself becomes the configured root, so the layout
+	// renders a target path nested inside the very repository being
+	// adopted: the scenario the review's own reproduction used.
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+	initRepository(t, root)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/gadget.git")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"adopt", "--yes", root}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("adopt onto a target nested inside the source = 0, want a refusal")
+	}
+	if !strings.Contains(stderr.String(), "inside") {
+		t.Fatalf("adopt stderr = %q, want it to say the target is inside the source", stderr.String())
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read %s: %v", root, err)
+	}
+	for _, e := range entries {
+		if e.Name() == "github.com" {
+			t.Fatalf("adopt left %s behind inside the repository it refused to move", filepath.Join(root, "github.com"))
+		}
+	}
+}
+
+func TestRunAdopt_TreatsAnUncheckableTargetAsAConflict(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	// The target's immediate parent exists but is unreadable: "os.Stat"
+	// on the target itself fails with a permission error, not "the path
+	// does not exist".
+	blocked := filepath.Join(root, "github.com", "acme")
+	if err := os.MkdirAll(blocked, 0o755); err != nil {
+		t.Fatalf("create %s: %v", blocked, err)
+	}
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatalf("chmod %s: %v", blocked, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+
+	oldPath := filepath.Join(home, "elsewhere", "widget")
+	initRepository(t, oldPath)
+	runGit(t, oldPath, "remote", "add", "origin", "https://github.com/acme/widget.git")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"adopt", "--yes", oldPath}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("adopt onto an unreadable target = 0, want a refusal")
+	}
+	if !strings.Contains(stderr.String(), "cannot check") {
+		t.Fatalf("adopt stderr = %q, want it to say the target could not be checked", stderr.String())
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("adopt moved the repository despite an unreadable target: %v", err)
+	}
+}
+
 func TestRunAdopt_ExactlyOnePathIsRequired(t *testing.T) {
 	setupEnv(t)
 

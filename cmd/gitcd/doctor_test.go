@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -160,6 +161,57 @@ func TestRunDoctor_JSONOutput(t *testing.T) {
 	}
 }
 
+func TestRunDoctor_JSONFixOutputIsValidJSON(t *testing.T) {
+	home := setupEnv(t)
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+profiles:
+  work:
+    user.email: acme-work-identity
+rules:
+  - host: github.com
+    profile: work
+`)
+
+	var stdout, stderr bytes.Buffer
+	run([]string{"doctor", "--json", "--fix"}, &stdout, &stderr)
+
+	var out struct {
+		ConfigPath string           `json:"configPath"`
+		Fixed      []map[string]any `json:"fixed"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("doctor --json --fix produced invalid JSON on stdout: %v, output: %s", err, stdout.String())
+	}
+	if out.ConfigPath != filepath.Join(home, ".gitcd.yaml") {
+		t.Fatalf("doctor --json --fix configPath = %q, want %q", out.ConfigPath, filepath.Join(home, ".gitcd.yaml"))
+	}
+	if len(out.Fixed) == 0 {
+		t.Fatal("doctor --json --fix fixed is empty, want the managed file fix reported")
+	}
+}
+
+func TestRunDoctor_JSONFixDryRunOutputIsValidJSON(t *testing.T) {
+	home := setupEnv(t)
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+profiles:
+  work:
+    user.email: acme-work-identity
+rules:
+  - host: github.com
+    profile: work
+`)
+
+	var stdout, stderr bytes.Buffer
+	run([]string{"doctor", "--json", "--fix", "--dry-run"}, &stdout, &stderr)
+
+	var out struct {
+		ConfigPath string `json:"configPath"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("doctor --json --fix --dry-run produced invalid JSON on stdout: %v, output: %s", err, stdout.String())
+	}
+}
+
 func TestRunDoctor_FixRenamesACaseOnlyPathMismatch(t *testing.T) {
 	home := setupEnv(t)
 	root := filepath.Join(home, "Code")
@@ -211,4 +263,113 @@ func containsExact(names []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestRunDoctor_FixRenameMessageNamesTheAncestorNotTheRepoPath(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	// Two repositories share one mis-cased owner ancestor, and both
+	// remotes agree it should read lowercase: a legitimate, uncontested
+	// rename of the shared ancestor, not the per-repository leaf path.
+	widget := filepath.Join(root, "github.com", "ACME", "widget")
+	initRepository(t, widget)
+	runGit(t, widget, "remote", "add", "origin", "https://github.com/acme/widget.git")
+	gadget := filepath.Join(root, "github.com", "ACME", "gadget")
+	initRepository(t, gadget)
+	runGit(t, gadget, "remote", "add", "origin", "https://github.com/acme/gadget.git")
+
+	var stdout, stderr bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdout, &stderr)
+
+	oldAncestor := filepath.Join(root, "github.com", "ACME")
+	newAncestor := filepath.Join(root, "github.com", "acme")
+	wantLine := fmt.Sprintf("renamed %s to %s", oldAncestor, newAncestor)
+	if !strings.Contains(stdout.String(), wantLine) {
+		t.Fatalf("doctor --fix stdout = %q, want a line naming the ancestor pair %q", stdout.String(), wantLine)
+	}
+	badLine := fmt.Sprintf("renamed %s to %s", widget, filepath.Join(root, "github.com", "acme", "widget"))
+	if strings.Contains(stdout.String(), badLine) {
+		t.Fatalf("doctor --fix stdout = %q, want it to never name the repository's own leaf path as what moved", stdout.String())
+	}
+}
+
+func TestRunDoctor_FixRefusesAContestedAncestorAndConverges(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	// Both repositories physically share one ancestor directory, spelled
+	// "Acme" on disk. "widget"'s own remote wants it lowercase, so it is
+	// mismatched; "other"'s remote wants exactly "Acme", so it already
+	// matches and carries no finding of its own. Renaming the ancestor to
+	// fix "widget" would immediately un-place "other".
+	widget := filepath.Join(root, "github.com", "Acme", "widget")
+	initRepository(t, widget)
+	runGit(t, widget, "remote", "add", "origin", "https://github.com/acme/widget.git")
+	other := filepath.Join(root, "github.com", "Acme", "other")
+	initRepository(t, other)
+	runGit(t, other, "remote", "add", "origin", "https://github.com/Acme/other.git")
+
+	readEntries := func() []string {
+		entries, err := os.ReadDir(filepath.Join(root, "github.com"))
+		if err != nil {
+			t.Fatalf("read %s: %v", filepath.Join(root, "github.com"), err)
+		}
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+	before := readEntries()
+
+	var stdout1, stderr1 bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdout1, &stderr1)
+	if strings.Contains(stdout1.String(), "renamed") {
+		t.Fatalf("doctor --fix (run 1) stdout = %q, want no rename of a contested ancestor", stdout1.String())
+	}
+	if !strings.Contains(stdout1.String(), "ancestor-case-conflict") {
+		t.Fatalf("doctor --fix (run 1) stdout = %q, want an ancestor-case-conflict finding", stdout1.String())
+	}
+	afterRun1 := readEntries()
+	if !equalStringSets(before, afterRun1) {
+		t.Fatalf("doctor --fix (run 1) changed the directory entries under github.com: before %v, after %v", before, afterRun1)
+	}
+
+	var stdout2, stderr2 bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdout2, &stderr2)
+	if strings.Contains(stdout2.String(), "renamed") {
+		t.Fatalf("doctor --fix (run 2) stdout = %q, want no rename of a contested ancestor", stdout2.String())
+	}
+	if !strings.Contains(stdout2.String(), "ancestor-case-conflict") {
+		t.Fatalf("doctor --fix (run 2) stdout = %q, want the conflict reported again", stdout2.String())
+	}
+	afterRun2 := readEntries()
+	if !equalStringSets(afterRun1, afterRun2) {
+		t.Fatalf(
+			"doctor --fix (run 2) is not a no-op: directory entries under github.com changed, run 1 %v, run 2 %v",
+			afterRun1, afterRun2,
+		)
+	}
+}
+
+func equalStringSets(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := map[string]int{}
+	for _, v := range a {
+		counts[v]++
+	}
+	for _, v := range b {
+		counts[v]--
+	}
+	for _, c := range counts {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }

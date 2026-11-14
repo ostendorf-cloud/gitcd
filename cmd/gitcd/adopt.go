@@ -35,6 +35,18 @@ import (
 // and nothing here resolves which of the two a given key would need, so
 // guessing is refused rather than risking a write to the wrong one.
 //
+// It also refuses outright a linked worktree, and a main checkout that
+// still has one: a linked worktree's ".git" file names an absolute path
+// into its main checkout's own ".git/worktrees", and the main checkout's
+// own administrative files name an absolute path back, so moving either
+// end breaks the pair the moment the other is not moved along with it,
+// git.IsRepository's own guard accepting the ".git" file a linked
+// worktree carries just as readily as an ordinary clone's ".git"
+// directory. Repairing both ends with "git worktree repair" after the
+// move is possible, but adopt only moves one path per run, so it refuses
+// rather than silently taking on the job of repairing a pair of
+// directories it was not asked to move together.
+//
 // Moving the directory asks first, on stderr, reading the answer from
 // stdin: the safe default is to never move anything, so a closed or
 // empty stdin, and an unrecognised answer, both decline. "--yes" skips
@@ -65,6 +77,16 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if !git.IsRepository(oldPath) {
 		fmt.Fprintf(stderr, "gitcd adopt: %s is not a git repository\n", oldPath)
+		return 1
+	}
+
+	worktreeMsg, err := adoptWorktreeConflict(ctx, oldPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "gitcd adopt: %v\n", err)
+		return 1
+	}
+	if worktreeMsg != "" {
+		fmt.Fprintf(stderr, "gitcd adopt: %s\n", worktreeMsg)
 		return 1
 	}
 
@@ -121,6 +143,11 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	if rel, err := filepath.Rel(oldPath, newPath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "." {
+		fmt.Fprintf(stderr, "gitcd adopt: %s is inside %s; adopt refuses to move a repository into itself\n", newPath, oldPath)
+		return 1
+	}
+
 	if *dryRun {
 		fmt.Fprintln(stdout, oldPath)
 		fmt.Fprintln(stdout, newPath)
@@ -135,11 +162,22 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(newPath), 0o755); err != nil {
-		fmt.Fprintf(stderr, "gitcd adopt: create %s: %v\n", filepath.Dir(newPath), err)
+	mkdirTarget := filepath.Dir(newPath)
+	createdFrom := firstMissingAncestor(mkdirTarget)
+	if err := os.MkdirAll(mkdirTarget, 0o755); err != nil {
+		fmt.Fprintf(stderr, "gitcd adopt: create %s: %v\n", mkdirTarget, err)
 		return 1
 	}
 	if err := os.Rename(oldPath, newPath); err != nil {
+		if createdFrom != "" {
+			if removeErr := os.RemoveAll(createdFrom); removeErr != nil {
+				fmt.Fprintf(
+					stderr, "gitcd adopt: move %s to %s: %v (also failed to remove %s, created for the move: %v)\n",
+					oldPath, newPath, err, createdFrom, removeErr,
+				)
+				return 1
+			}
+		}
 		fmt.Fprintf(stderr, "gitcd adopt: move %s to %s: %v\n", oldPath, newPath, err)
 		return 1
 	}
@@ -149,14 +187,107 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return fixAdoptedConfig(ctx, stderr, cfg, r, newPath)
 }
 
+// adoptWorktreeConflict reports why oldPath must refuse to move at all,
+// before anything else about it is even read, because it is a linked
+// worktree or still has one of its own: a linked worktree's ".git" file
+// names an absolute path into its main checkout's own
+// ".git/worktrees", and the main checkout's own administrative files
+// name an absolute path back, so moving either end without moving the
+// other breaks the pair, silently, the moment a routine "git worktree
+// prune" or "git gc" next runs. It returns "" when oldPath carries no
+// linked worktree relationship at all.
+func adoptWorktreeConflict(ctx context.Context, oldPath string) (string, error) {
+	gitDir, err := git.Dir(ctx, oldPath)
+	if err != nil {
+		return "", fmt.Errorf("read the git directory of %s: %w", oldPath, err)
+	}
+	commonDir, err := git.CommonDir(ctx, oldPath)
+	if err != nil {
+		return "", fmt.Errorf("read the common directory of %s: %w", oldPath, err)
+	}
+	if gitDir != commonDir {
+		return fmt.Sprintf(
+			"%s is a linked worktree; moving it would break git's own link back to its main checkout\n"+
+				"move a linked worktree with \"git worktree move %s <destination>\" instead",
+			oldPath, oldPath,
+		), nil
+	}
+
+	worktrees, err := git.WorktreePaths(ctx, oldPath)
+	if err != nil {
+		return "", fmt.Errorf("list the worktrees of %s: %w", oldPath, err)
+	}
+	// git reports every worktree path resolved through any symlink,
+	// "git rev-parse --path-format=absolute" style; oldPath is only
+	// "filepath.Abs" of whatever the user typed, so the two are compared
+	// resolved the same way, or oldPath itself would misidentify as its
+	// own, separate linked worktree whenever a symlink sits on its path,
+	// a system temporary directory being the common case.
+	resolvedOld := resolveSymlinks(oldPath)
+	var others []string
+	for _, w := range worktrees {
+		if resolveSymlinks(w) != resolvedOld {
+			others = append(others, w)
+		}
+	}
+	if len(others) == 0 {
+		return "", nil
+	}
+	return fmt.Sprintf(
+		"%s has a linked worktree at %s; moving it would break git's own link to it\n"+
+			"move the linked worktree first with \"git worktree move\", or remove it with \"git worktree remove\", then adopt this repository",
+		oldPath, strings.Join(others, ", "),
+	), nil
+}
+
+// resolveSymlinks resolves every symlink in path, falling back to path
+// itself when it cannot, empty or not yet created being the common case.
+func resolveSymlinks(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
+}
+
+// firstMissingAncestor returns the topmost directory, walking up from
+// dir, that does not yet exist on disk, or "" when dir already exists:
+// "os.MkdirAll(dir, ...)" creates exactly this directory and everything
+// below it, so "os.RemoveAll" on the same path undoes that MkdirAll
+// precisely, leaving every ancestor directory that already existed
+// before untouched.
+func firstMissingAncestor(dir string) string {
+	if _, err := os.Stat(dir); err == nil {
+		return ""
+	}
+	missing := dir
+	for {
+		parent := filepath.Dir(missing)
+		if parent == missing {
+			return missing
+		}
+		if _, err := os.Stat(parent); err == nil {
+			return missing
+		}
+		missing = parent
+	}
+}
+
 // adoptTargetConflict reports why newPath must refuse to receive oldPath's
 // repository, or "" when the move is clear to make: newPath already
 // existing is always a conflict, named with the remote already found
 // there when it can be read, since that is the detail a user deciding
-// what to do next needs most.
+// what to do next needs most. An "os.Stat" error other than "the path
+// does not exist", a permission denied or a symlink loop for instance,
+// is reported as a conflict too, rather than read as "no conflict": the
+// move itself would very likely fail the same way, after having already
+// asked for consent, and newPath might in fact already exist behind
+// whatever is blocking the check.
 func adoptTargetConflict(ctx context.Context, cfg config.Config, newPath string, want remote.Remote) string {
 	if _, err := os.Stat(newPath); err != nil {
-		return ""
+		if errors.Is(err, os.ErrNotExist) {
+			return ""
+		}
+		return fmt.Sprintf("cannot check whether %s already exists: %v", newPath, err)
 	}
 	if !git.IsRepository(newPath) {
 		return fmt.Sprintf("%s already exists and is not a git repository", newPath)
