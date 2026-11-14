@@ -80,6 +80,71 @@ default aliases. To clear a default's `aliases` deliberately, set it to an empty
 `layout: ""`, which then falls back to `layout.default` exactly like a host with no `layout`
 key at all. See `docs/adr/0001-host-config-merges-field-by-field.md`.
 
+### What a profile name may be
+
+A profile name becomes the name of the file `apply` renders that profile to, under
+`~/.config/gitcd/profiles/`, and is written into the include file as part of a path. So it has
+to be one file name, on every platform: letters, digits, `.`, `-` and `_`, beginning and ending
+with a letter or a digit. A name that is empty, holds a path separator, names the current or a
+parent directory, or is a name Windows reserves for a device is rejected.
+
+The class differs from the one a profile key's section uses, in both directions. It allows `_`
+and `.`, because a name is also what you type at `--profile work_eu`. It requires a letter or
+digit at each end, because a leading `.` would hide the rendered file and a trailing `.` or
+space is silently stripped by Windows, which would render two distinct profiles to one file.
+
+A rejected name fails the whole file at load time, before any rule is looked at, so a rule
+naming that profile never resolves and no command runs against a partly valid configuration.
+
+### What a profile key may be
+
+A profile key is a git config key in `section.key` or `section.subsection.key` form. The
+section is a letter followed by letters, digits and `-`; the subsection and the key name hold
+only letters, digits and `-`. The subsection is held to the same narrow class as the key name
+because it is written into the `[section "subsection"]` header of the generated file, where a
+wider character would put the keys after it under a section the profile does not name.
+
+A value may hold anything but a control character git config has no escape for: a line break,
+a tab and a backspace are written escaped and read back unchanged, a carriage return is
+rejected.
+
+A key under the `remote` section is rejected: a profile is applied through a condition that
+reads the remote URL, so a profile setting one would decide its own condition.
+
+### Keys a profile carries only when named
+
+Some git config keys hand git a command to run, take over a credential prompt, or change which
+URL git contacts. A profile is picked automatically per remote, so these are rejected unless
+`allowUnsafeKeys` names the key:
+
+- `core.sshCommand`, `core.pager`, `core.editor`, `core.fsmonitor`
+- every key under `credential`
+- `url.<base>.insteadOf` and `url.<base>.pushInsteadOf`
+- any key whose name is `process` or `hook`, under any section
+
+```yaml
+allowUnsafeKeys:
+  - core.pager
+
+profiles:
+  private:
+    user.email: simon@example.test
+    core.pager: less -FRX
+```
+
+Each entry names one key, matched the way git matches a key: the section and the key name
+case-insensitively, the subsection exactly. A wildcard is not accepted, and an entry naming a
+key that needs no opt in is rejected rather than ignored. `doctor` reports every key applied
+this way, so the choice stays visible.
+
+### What a rule field may be
+
+A rule's `host`, `owner` and `repo` are written literally into the conditions of the generated
+include file. Each holds only letters, digits, `.`, `-` and `_`, with `/` additionally allowed
+in an `owner` so a group and subgroup can be named as one. A glob is not accepted in any of
+them: leaving a field out already matches every value of that field, while a `*` in an `owner`
+would silently apply the rule's identity and signing key to repositories it does not name.
+
 ## Development
 
 ```sh
