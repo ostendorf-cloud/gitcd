@@ -75,3 +75,27 @@ func IsRepository(path string) bool {
 	_, err := os.Stat(filepath.Join(path, ".git"))
 	return err == nil
 }
+
+// Worktrees runs "git -C path worktree list --porcelain" and returns the
+// absolute path of every worktree git has registered for the repository at
+// path, path's own main checkout included: git's own registry is
+// authoritative for this, and reading it back costs one subprocess call
+// per repository rather than a directory walk that would have to look
+// inside a path a repository boundary rule otherwise always skips past,
+// such as a linked worktree nested inside its own repository's working
+// tree.
+func Worktrees(ctx context.Context, path string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "worktree", "list", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git: list the worktrees of %s: %w", path, err)
+	}
+
+	var worktrees []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if p, ok := strings.CutPrefix(line, "worktree "); ok {
+			worktrees = append(worktrees, p)
+		}
+	}
+	return worktrees, nil
+}

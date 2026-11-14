@@ -24,12 +24,16 @@ not repeated here.
 - `internal/gitsync/`: fetches a set of repositories through a bounded pool of workers; never
   pulls, rebases or merges. Named apart from `sync` so no caller shadows the standard library
   package of that name.
-- `internal/shell/`: the per shell init snippet `shell-init` prints.
+- `internal/scan/`: walks the configured root into the repository values `list` and `cd`
+  consume, stopping at a repository boundary, a `.git` entry, file or directory alike, and
+  asking git for the linked worktrees that boundary skips past.
+- `internal/shell/`: the per shell init snippet `shell-init` prints, including the `cd` tab
+  completion registered for zsh and fish.
 
-`list`, `cd`, `doctor` and `adopt` are later milestones, tracked as issues; their own packages
-land with them. `cmd/gitcd/discover.go` walks the configured root for `status`, `sync` and
-`open`; issue #3's `internal/scan` walks the same ground for `list`, `doctor` and `adopt` with
-a richer value, and the two should be reconciled into one once both have landed.
+`doctor` and `adopt` are a later milestone, tracked as an issue; their own packages land with
+it. `cmd/gitcd/discover.go` walks the configured root for `status`, `sync` and `open`, while
+`internal/scan` walks the same ground for `list` and `cd` with a richer value; issue #15
+reconciles the two into one.
 
 ## Commands
 
@@ -49,7 +53,7 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   dependency needs a reason in the pull request.
 - No CLI framework. `flag` and hand written dispatch, as in `release-me`.
 - A command writes nothing but its result to stdout; everything else, including every log
-  line, goes to stderr. `clone` and `path` print the resolved path on stdout, so a shell
+  line, goes to stderr. `clone`, `path` and `cd` print the resolved path on stdout, so a shell
   function can wrap them.
 - Every command that writes supports `--dry-run`.
 - Tests: table driven, git repositories generated under a temporary directory, `HOME`,

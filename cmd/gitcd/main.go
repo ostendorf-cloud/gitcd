@@ -24,6 +24,8 @@ Usage:
 Commands:
   clone        clone a repository into its rendered path, printing the path
   path         resolve a repository name or host/owner/repo to its path
+  list         list every repository under the configured root
+  cd           resolve a partial repository name to its path, printing it
   init         add the identity profile include to the global git config
   apply        render and write the identity profile files
   profile      pin, remove or inspect a repository's identity profile
@@ -53,6 +55,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runClone(args[1:], stdout, stderr)
 	case "path":
 		return runPath(args[1:], stdout, stderr)
+	case "list":
+		return runList(args[1:], stdout, stderr)
+	case "cd":
+		return runCd(args[1:], os.Stdin, isTerminalFile(os.Stdin), stdout, stderr)
 	case "init":
 		return runInit(args[1:], os.Stdin, stdout, stderr)
 	case "apply":

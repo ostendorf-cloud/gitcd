@@ -70,6 +70,14 @@ func initRepository(t *testing.T, dir string) {
 	runGit(t, dir, "commit", "-m", "add README")
 }
 
+// addRemote sets dir's "origin" remote to remoteURL, needed by any
+// repository "gitcd list" or "gitcd cd" must find: both walk through
+// internal/profile.Inspect, which requires a configured remote to resolve.
+func addRemote(t *testing.T, dir, remoteURL string) {
+	t.Helper()
+	runGit(t, dir, "remote", "add", "origin", remoteURL)
+}
+
 // goEnv pins the toolchain's own GOPATH, GOCACHE and GOMODCACHE, read once
 // here before any test's setupEnv can point HOME at a fresh temporary
 // directory. buildGitcd needs them read before that happens: "go build"
