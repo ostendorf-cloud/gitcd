@@ -133,7 +133,7 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	rel, err := layout.Render(cfg.LayoutFor(r.Host), r)
 	if err != nil {
-		fmt.Fprintf(stderr, "gitcd adopt: %v\n", err)
+		fmt.Fprintf(stderr, "gitcd adopt: render a path for %s: %v\n", oldPath, err)
 		return 1
 	}
 	newPath := filepath.Join(cfg.Root, rel)

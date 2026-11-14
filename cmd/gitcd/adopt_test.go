@@ -275,6 +275,27 @@ func TestRunAdopt_RefusesABareRepositoryWithAnAccurateMessage(t *testing.T) {
 	}
 }
 
+func TestRunAdopt_NamesTheRepositoryWhenTheLayoutRejectsItsOrigin(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	// The stored origin carries an owner the layout now rejects, the
+	// same way a repository adopted before this check existed might.
+	oldPath := filepath.Join(home, "elsewhere", "widget")
+	initRepository(t, oldPath)
+	runGit(t, oldPath, "remote", "add", "origin", "git@github.com:a:b/widget.git")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"adopt", "--yes", oldPath}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("adopt on a repository whose origin the layout rejects = 0, want a refusal")
+	}
+	if !strings.Contains(stderr.String(), oldPath) {
+		t.Fatalf("adopt stderr = %q, want it to name %s", stderr.String(), oldPath)
+	}
+}
+
 func TestRunAdopt_RefusesAMissingPathAsMissingNotAsNotAGitRepository(t *testing.T) {
 	home := setupEnv(t)
 	root := filepath.Join(home, "Code")
