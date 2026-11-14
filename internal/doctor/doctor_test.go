@@ -435,6 +435,24 @@ func TestCheckGlobal(t *testing.T) {
 		}
 	})
 
+	t.Run("instead attaches to belongs, not to the trailing subclause", func(t *testing.T) {
+		content := []byte("[user]\n\temail = [email protected]\n")
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", false)
+		if err != nil {
+			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
+		}
+		f, ok := findKind(findings, doctor.KindGlobalIdentityKey)
+		if !ok {
+			t.Fatalf("CheckGlobal() = %+v, want a %s finding", findings, doctor.KindGlobalIdentityKey)
+		}
+		if !strings.Contains(f.Message, "belongs instead in") {
+			t.Fatalf("finding message = %q, want it to read \"belongs instead in\"", f.Message)
+		}
+		if strings.HasSuffix(f.Message, "define instead") {
+			t.Fatalf("finding message = %q, want \"instead\" not trailing after the subclause", f.Message)
+		}
+	})
+
 	t.Run("a global identity key after the include is reported as an ordering finding too", func(t *testing.T) {
 		content := []byte("[include]\n\tpath = /some/include.gitconfig\n[user]\n\temail = [email protected]\n")
 		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", true)

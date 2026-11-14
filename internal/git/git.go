@@ -64,7 +64,7 @@ func RemoteURL(ctx context.Context, path string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", path, "config", "--get", "remote.origin.url")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("git: read the origin remote of %s: %w", path, err)
+		return "", fmt.Errorf("git: read the origin remote of %s: %w", path, foldStderr(err))
 	}
 	return strings.TrimSpace(string(out)), nil
 }

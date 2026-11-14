@@ -455,7 +455,7 @@ func CheckGlobal(content []byte, globalPath, movedProfileTarget string, movedPro
 		findings = append(findings, Finding{
 			Kind: KindGlobalIdentityKey,
 			Message: fmt.Sprintf(
-				"%s sets %s = %s directly; \"user.useConfigOnly\" cannot suppress it, so every repository gitcd manages, including one no rule matches, gets this identity; it belongs in %s instead",
+				"%s sets %s = %s directly; \"user.useConfigOnly\" cannot suppress it, so every repository gitcd manages, including one no rule matches, gets this identity; it belongs instead in %s",
 				globalPath, v.Key, v.Value, belongsIn,
 			),
 		})

@@ -200,6 +200,39 @@ func TestRemoteURL_IsNotResolvedThroughAnInsteadOfRewrite(t *testing.T) {
 	}
 }
 
+// TestRemoteURL_FoldsGitsOwnStderrIntoTheError guards against RemoteURL
+// wrapping a failing "git config --get" only as the standard library's
+// own bare "exit status 128", dropping the diagnostic line git itself
+// printed saying why. An ordinary empty, non repository directory
+// produces no stderr at all for this exact invocation ("git config
+// --get" without "--local" simply reports "key not found" rather than
+// requiring a repository), so it cannot exercise this fold; an orphaned
+// linked worktree, the same fixture config_test.go's own "folds git's
+// own stderr" test for Dir uses, reliably does.
+func TestRemoteURL_FoldsGitsOwnStderrIntoTheError(t *testing.T) {
+	setupGitEnv(t)
+
+	root := t.TempDir()
+	initRepository(t, root)
+	worktree := filepath.Join(root, "..", "worktree")
+	run(t, root, "worktree", "add", worktree)
+
+	// The main checkout is gone: every git invocation inside the
+	// worktree now fails with git's own diagnostic ("fatal: not a git
+	// repository: (null)"), rather than succeeding.
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatalf("remove %s: %v", root, err)
+	}
+
+	_, err := git.RemoteURL(context.Background(), worktree)
+	if err == nil {
+		t.Fatal("RemoteURL() on an orphaned linked worktree = nil error, want one naming why")
+	}
+	if !strings.Contains(err.Error(), "fatal:") {
+		t.Fatalf("RemoteURL() error = %q, want git's own stderr folded in, not a bare \"exit status 128\"", err.Error())
+	}
+}
+
 func TestIsRepository(t *testing.T) {
 	setupGitEnv(t)
 
