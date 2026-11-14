@@ -74,6 +74,19 @@ const (
 	// that section, so a key already after it keeps beating every
 	// includeIf value silently.
 	KindGlobalIdentityOrder Kind = "global-identity-order"
+	// KindOptedInKey is a profile key from a family profiles do not carry
+	// by default, which the configuration's "allowUnsafeKeys" list opts
+	// back in. It is not a defect: the opt in is a deliberate choice, and
+	// doctor reports it rather than repairing it.
+	//
+	// It is reported because the choice outlives the moment it was made.
+	// A key that makes git run a command of its own, answer a credential
+	// prompt or rewrite a remote URL applies to every repository its
+	// profile's rules match, from then on, through a file nobody opens
+	// again. doctor is the command that says what gitcd's configuration
+	// actually does to a repository, so a key of that weight belongs in
+	// its report, named, next to the profile carrying it.
+	KindOptedInKey Kind = "opted-in-key"
 	// KindAncestorCaseConflict is an ancestor directory, shared by two or
 	// more repositories under root, whose repositories disagree on its
 	// spelling: each repository's own remote implies a different case
@@ -416,6 +429,40 @@ func CheckManagedFiles(cfg config.Config, home string) ([]Finding, error) {
 		}
 	}
 	return findings, nil
+}
+
+// CheckOptedInKeys reports one KindOptedInKey finding per profile key
+// cfg opts back in through its "allowUnsafeKeys" list, in a stable order
+// by profile name and then key. A configuration with no such key, the
+// ordinary case, yields none.
+//
+// Nothing here is fixable: the opt in is the user's own decision, and
+// doctor never undoes one of those. The finding states what the key
+// does and which profile carries it.
+func CheckOptedInKeys(cfg config.Config) []Finding {
+	names := make([]string, 0, len(cfg.Profiles))
+	for name := range cfg.Profiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var findings []Finding
+	for _, name := range names {
+		for _, key := range cfg.Profiles[name].Keys() {
+			why, optedIn := config.UnsafeKeyReason(key)
+			if !optedIn {
+				continue
+			}
+			findings = append(findings, Finding{
+				Kind: KindOptedInKey,
+				Message: fmt.Sprintf(
+					"profile %q carries %q, which %s; it applies because %q lists it",
+					name, key, why, config.AllowUnsafeKeysKey,
+				),
+			})
+		}
+	}
+	return findings
 }
 
 // managedFileNote names path as the gitcd include file specifically,

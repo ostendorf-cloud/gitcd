@@ -52,7 +52,20 @@ type Rendered map[string]string
 
 // Render renders every profile file and the include file for cfg, with
 // every path resolved under home.
+//
+// cfg is validated in full before anything is rendered, through
+// config.Config.Validate, the same gate Load applies to a configuration
+// file. Render is exported and takes a config.Config, so a caller can
+// build one by hand, and what this map holds is what "apply" then
+// writes: every profile name that decides a path, every rule field and
+// host alias and layout that decides a condition, and every key and
+// value that decides file content has to be acceptable before any of it
+// is turned into a file.
 func Render(cfg config.Config, home string) (Rendered, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("gitconfig: %w", err)
+	}
+
 	out := Rendered{}
 
 	names := make([]string, 0, len(cfg.Profiles))
@@ -73,8 +86,22 @@ func Render(cfg config.Config, home string) (Rendered, error) {
 	return out, nil
 }
 
-// RenderProfile renders one profile's git configuration file content. When
-// useConfigOnly is true and the profile does not already set its own
+// RenderProfile renders one profile's git configuration file content.
+//
+// Every key's syntax and every value's characters are validated here as
+// well as at load time: this function is exported and takes a
+// config.Profile, so a caller can hand it a map it built itself, and a
+// key or value that cannot be rendered correctly must fail here rather
+// than render into a file that parses as something other than what it
+// says.
+//
+// The opt in a restricted key needs is deliberately not applied here. A
+// config.Profile carries no allow list, so this function cannot tell a
+// key that was opted in from one that was not; that gate belongs to the
+// configuration as a whole and is applied by config.Config.Validate,
+// which both Load and Render call.
+//
+// When useConfigOnly is true and the profile does not already set its own
 // "user.useConfigOnly", "true" is added: a repository whose identity gitcd
 // cannot determine then refuses to commit rather than falling back to a
 // machine wide identity.
@@ -100,9 +127,15 @@ func RenderProfile(p config.Profile, useConfigOnly bool) (string, error) {
 	currentSection, currentSubsection := "", ""
 	wroteHeader := false
 	for _, key := range keys {
-		section, subsection, name, err := splitKey(key)
+		if err := config.ValidateProfileKey(key); err != nil {
+			return "", fmt.Errorf("gitconfig: %w", err)
+		}
+		if err := config.ValidateProfileValue(entries[key]); err != nil {
+			return "", fmt.Errorf("gitconfig: key %q: %w", key, err)
+		}
+		section, subsection, name, err := config.SplitKey(key)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("gitconfig: %w", err)
 		}
 		if !wroteHeader || section != currentSection || subsection != currentSubsection {
 			if subsection == "" {
@@ -139,6 +172,15 @@ func RenderProfile(p config.Profile, useConfigOnly bool) (string, error) {
 // repository under neither a rule nor a default profile committed
 // successfully under a guessed identity despite every profile file
 // itself setting "useConfigOnly = true".
+//
+// Every input that reaches a condition here is validated by
+// config.Config.Validate, which Render calls before this runs: a rule's
+// host, owner and repo, the profile name each path is built from, the
+// host aliases hasconfigGlobs interpolates, and the layout template
+// renderGitdirGlob interpolates. None of the four is written as a value,
+// so neither quoting nor escaping applies to any of them: one holding a
+// quote would close the condition, and one holding a glob metacharacter
+// would match repositories the rule does not name.
 func renderIncludes(cfg config.Config, home string) string {
 	var b strings.Builder
 	b.WriteString(generatedHeader)
@@ -347,27 +389,30 @@ func repoPathVariants(owner, repo string) []string {
 	}
 }
 
-// splitKey splits a profile's "section.key" or "section.subsection.key"
-// git config key into its parts, consistent with the "section.key"
-// validation internal/config already applies to every profile key.
-func splitKey(key string) (section, subsection, name string, err error) {
-	first := strings.Index(key, ".")
-	last := strings.LastIndex(key, ".")
-	if first <= 0 || last == len(key)-1 {
-		return "", "", "", fmt.Errorf("gitconfig: %q is not a \"section.key\" git config key", key)
-	}
-	if first == last {
-		return key[:first], "", key[first+1:], nil
-	}
-	return key[:first], key[first+1 : last], key[last+1:], nil
-}
-
 // quoteValue double quotes value for use as a git config value or path,
-// escaping the two characters quoting itself introduces. Quoting is always
-// valid git config syntax, so this never needs to special case a value
-// that happens not to need it.
+// escaping the characters that would otherwise end the value early or be
+// read back as something else. Quoting is always valid git config syntax,
+// so this never needs to special case a value that happens not to need
+// it.
+//
+// The backslash and the quote are escaped because quoting itself
+// introduces them. The three control characters are escaped because a
+// value is written on one line: a line break inside the quotes ends the
+// line rather than the value, and git then refuses the whole file, which
+// for a file reached through an include means every git command in every
+// repository the include matches fails until it is repaired by hand.
+// Verified against git 2.54.0: "\n", "\t" and "\b" read back as the
+// control character, a literal line break inside the quotes does not
+// parse at all. Every other control character has no escape git reads
+// back, so config.ValidateProfileValue refuses it instead, and
+// RenderProfile applies that gate before reaching here.
 func quoteValue(value string) string {
-	escaped := strings.ReplaceAll(value, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-	return `"` + escaped + `"`
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+		"\n", `\n`,
+		"\t", `\t`,
+		"\b", `\b`,
+	)
+	return `"` + replacer.Replace(value) + `"`
 }

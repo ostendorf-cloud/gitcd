@@ -179,6 +179,8 @@ func collectFindings(ctx context.Context, cfg config.Config, home string, logger
 		findings = append(findings, conflicts...)
 	}
 
+	findings = append(findings, doctor.CheckOptedInKeys(cfg)...)
+
 	managedFindings, err := doctor.CheckManagedFiles(cfg, home)
 	if err != nil {
 		return nil, err
