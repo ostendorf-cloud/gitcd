@@ -12,6 +12,12 @@ import (
 	"github.com/ostendorf-cloud/gitcd/internal/remote"
 )
 
+// rightToLeftOverride is U+202E, a Unicode formatting character that
+// changes the reading direction of the text around it. Built from its
+// code point, rather than written as a literal rune in source, so the
+// character itself never has to appear directly in this file.
+const rightToLeftOverride = rune(0x202E)
+
 func TestRender(t *testing.T) {
 	t.Parallel()
 
@@ -112,6 +118,36 @@ func TestRender(t *testing.T) {
 			name:    "an owner carrying a backslash fails, on every host operating system",
 			tmpl:    "{host}/{owner}/{repo}",
 			remote:  remote.Remote{Host: "github.com", Owner: `acme\..`, Repo: "widget"},
+			wantErr: true,
+		},
+		{
+			name:    "a repo with no visible content fails",
+			tmpl:    "{host}/{owner}/{repo}",
+			remote:  remote.Remote{Host: "github.com", Owner: "acme", Repo: " "},
+			wantErr: true,
+		},
+		{
+			name:    "an owner carrying a colon fails, on every host operating system",
+			tmpl:    "{host}/{owner}/{repo}",
+			remote:  remote.Remote{Host: "github.com", Owner: "a:b", Repo: "widget"},
+			wantErr: true,
+		},
+		{
+			name:    "a repo ending in a trailing dot fails",
+			tmpl:    "{host}/{owner}/{repo}",
+			remote:  remote.Remote{Host: "github.com", Owner: "acme", Repo: "widget."},
+			wantErr: true,
+		},
+		{
+			name:    "a repo ending in a trailing space fails",
+			tmpl:    "{host}/{owner}/{repo}",
+			remote:  remote.Remote{Host: "github.com", Owner: "acme", Repo: "widget "},
+			wantErr: true,
+		},
+		{
+			name:    "an owner carrying a right to left override character fails",
+			tmpl:    "{host}/{owner}/{repo}",
+			remote:  remote.Remote{Host: "github.com", Owner: "acme" + string(rightToLeftOverride) + "widget", Repo: "widget"},
 			wantErr: true,
 		},
 	}
@@ -249,6 +285,18 @@ func TestRenderKeepsTheRenderedDestinationInsideRoot(t *testing.T) {
 			name:    "an azure devops ssh remote with a parent directory project is rejected",
 			input:   "git@ssh.dev.azure.com:v3/acme-corp/../widget-repo",
 			tmpl:    "{host}/{org}/{project}/{repo}",
+			wantErr: true,
+		},
+		{
+			name:    "the scp style form with a second colon in the owner is rejected",
+			input:   "git@github.com:a:b/repo.git",
+			tmpl:    "{host}/{owner}/{repo}",
+			wantErr: true,
+		},
+		{
+			name:    "an https url whose encoded repository decodes to no visible content is rejected",
+			input:   "https://github.com/acme/%20",
+			tmpl:    "{host}/{owner}/{repo}",
 			wantErr: true,
 		},
 		{

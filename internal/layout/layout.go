@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/ostendorf-cloud/gitcd/internal/remote"
 )
@@ -109,14 +110,45 @@ func validateField(field, value string) error {
 	return nil
 }
 
-// validateSegment rejects seg, one component of field, when it is empty,
-// names the current or a parent directory, is itself absolute, or
-// otherwise carries a "/" or a "\": none of those can name one directory
-// inside the root the way an ordinary component does.
+// validateSegment rejects seg, one component of field, when it cannot name
+// exactly one directory inside the root the way an ordinary component
+// does, or when it would read back, on some platform this binary also
+// targets, as the same directory a differently spelled seg already names.
+//
+// Rejected: an empty component; one with no visible content once leading
+// and trailing whitespace is removed, since that renders the same kind of
+// collapsed, ambiguous segment an empty component would; one naming the
+// current or a parent directory; one that is itself absolute; one
+// carrying a "/" or a "\", on every host operating system, not only on
+// Windows, since this package and internal/remote always build and
+// compare a path as a literal "/" separated string, never through
+// path/filepath, so the same rendered value is read back on whichever
+// platform a later caller runs this binary on; one carrying a ":", a
+// character reserved inside a single Windows path component, for the
+// same cross-platform reason; one ending in a dot or a space, which
+// Windows strips from a final path component, so a component ending in
+// "widget" and one ending in "widget." would resolve to the same
+// directory there (stated from documented Windows path resolution rules;
+// there is no Windows host available here to confirm it live); and one
+// carrying a Unicode control or formatting character, rejected because
+// the rendered path reaches further than this one component's own
+// display — clone, path and cd print it on stdout for a shell function to
+// consume, and doctor and adopt log and print it too, so a character that
+// changes how the surrounding text reads affects every one of those
+// readers, not only how this component's own name looks in isolation.
+//
+// validateSegment enforces no length ceiling of its own. The destination
+// filesystem already enforces one, surfaced as a plain error from the
+// syscall gitcd already makes when it creates or opens the rendered
+// destination; a second ceiling here would have to track every target
+// filesystem's own limit instead of relying on the one that actually
+// applies at write time.
 func validateSegment(field, seg string) error {
 	switch {
 	case seg == "":
 		return fmt.Errorf("layout: %s has an empty path component", field)
+	case strings.TrimSpace(seg) == "":
+		return fmt.Errorf("layout: %s has a path component with no visible content: %q", field, seg)
 	case seg == ".":
 		return fmt.Errorf("layout: %s has a path component naming the current directory: %q", field, seg)
 	case seg == "..":
@@ -125,9 +157,30 @@ func validateSegment(field, seg string) error {
 		return fmt.Errorf("layout: %s has an absolute path component: %q", field, seg)
 	case strings.ContainsAny(seg, "/\\"):
 		return fmt.Errorf("layout: %s has a path component carrying a path separator: %q", field, seg)
+	case strings.Contains(seg, ":"):
+		return fmt.Errorf("layout: %s has a path component carrying a reserved character: %q", field, seg)
+	case seg != strings.TrimRight(seg, ". "):
+		return fmt.Errorf("layout: %s has a path component ending in a dot or a space: %q", field, seg)
+	case containsFormattingOrControl(seg):
+		return fmt.Errorf("layout: %s has a path component carrying a formatting or control character: %q", field, seg)
 	default:
 		return nil
 	}
+}
+
+// containsFormattingOrControl reports whether seg carries a Unicode
+// control character (category Cc, such as a tab or a literal newline) or
+// formatting character (category Cf, such as a bidirectional override):
+// neither changes which directory the component names, but either
+// changes how the surrounding text reads once the rendered path reaches
+// a terminal, a log line or a shell function consuming it.
+func containsFormattingOrControl(seg string) bool {
+	for _, r := range seg {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // Template names one host's path template, "" for the default applied to
