@@ -213,7 +213,7 @@ func adoptWorktreeConflict(ctx context.Context, oldPath string) (string, error) 
 		), nil
 	}
 
-	worktrees, err := git.WorktreePaths(ctx, oldPath)
+	worktrees, err := git.Worktrees(ctx, oldPath)
 	if err != nil {
 		return "", fmt.Errorf("list the worktrees of %s: %w", oldPath, err)
 	}

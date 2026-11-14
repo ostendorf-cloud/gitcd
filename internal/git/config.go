@@ -211,9 +211,25 @@ func revParsePath(ctx context.Context, path, arg string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--path-format=absolute", arg)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("git: rev-parse %s in %s: %w", arg, path, err)
+		return "", fmt.Errorf("git: rev-parse %s in %s: %w", arg, path, foldStderr(err))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// foldStderr folds the standard error output "exec.Cmd.Output" captured
+// onto a failing command's *exec.ExitError into the error itself, when
+// there is any: left alone, err.Error() renders only the bare "exit
+// status 128" the standard library's own ExitError carries, dropping the
+// one line git itself printed saying why, such as "fatal: not a git
+// repository" for a worktree whose main checkout no longer exists. err
+// is returned unchanged when it is not an *exec.ExitError, or carries no
+// captured output at all.
+func foldStderr(err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
+	}
+	return err
 }
 
 // configSectionHeader matches a git config section header line, capturing

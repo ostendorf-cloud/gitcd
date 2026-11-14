@@ -247,6 +247,38 @@ func TestIsRepository(t *testing.T) {
 	})
 }
 
+func TestIsBareRepository(t *testing.T) {
+	setupGitEnv(t)
+
+	t.Run("a bare repository is reported as bare", func(t *testing.T) {
+		bare := t.TempDir()
+		run(t, bare, "init", "--bare", "--initial-branch=main")
+
+		if git.IsRepository(bare) {
+			t.Fatalf("IsRepository(%q) = true, want false for a bare repository", bare)
+		}
+		if !git.IsBareRepository(context.Background(), bare) {
+			t.Fatalf("IsBareRepository(%q) = false, want true", bare)
+		}
+	})
+
+	t.Run("an ordinary clone is not bare", func(t *testing.T) {
+		root := t.TempDir()
+		initRepository(t, root)
+
+		if git.IsBareRepository(context.Background(), root) {
+			t.Fatalf("IsBareRepository(%q) = true, want false for an ordinary clone", root)
+		}
+	})
+
+	t.Run("a plain directory that is not a repository at all is not bare", func(t *testing.T) {
+		dir := t.TempDir()
+		if git.IsBareRepository(context.Background(), dir) {
+			t.Fatalf("IsBareRepository(%q) = true, want false for a plain directory", dir)
+		}
+	})
+}
+
 func TestWorktrees(t *testing.T) {
 	setupGitEnv(t)
 
