@@ -395,6 +395,54 @@ func TestIdentityKeyAfterInclude(t *testing.T) {
 // identity key sitting between two include sections ends up before the
 // insertion point, safe, while one sitting after both does not.
 
+func TestIdentityKeysAfterInclude(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no include section at all reports no keys", func(t *testing.T) {
+		t.Parallel()
+		content := "[user]\n\tname = Test User\n\temail = [email protected]\n"
+		keys, err := git.IdentityKeysAfterInclude([]byte(content), git.IdentityKeys)
+		if err != nil {
+			t.Fatalf("IdentityKeysAfterInclude() returned an unexpected error: %v", err)
+		}
+		if len(keys) != 0 {
+			t.Fatalf("IdentityKeysAfterInclude() = %v, want no keys", keys)
+		}
+	})
+
+	t.Run("every identity key after the include is reported, not only the first", func(t *testing.T) {
+		t.Parallel()
+		content := "[include]\n\tpath = /some/other/include.gitconfig\n" +
+			"[user]\n\tname = After Include\n\temail = [email protected]\n\tsigningkey = ssh-ed25519 AAAATRAILING\n"
+		keys, err := git.IdentityKeysAfterInclude([]byte(content), git.IdentityKeys)
+		if err != nil {
+			t.Fatalf("IdentityKeysAfterInclude() returned an unexpected error: %v", err)
+		}
+		want := []string{"user.name", "user.email", "user.signingkey"}
+		if len(keys) != len(want) {
+			t.Fatalf("IdentityKeysAfterInclude() = %v, want %v", keys, want)
+		}
+		for i, k := range want {
+			if keys[i] != k {
+				t.Fatalf("IdentityKeysAfterInclude() = %v, want %v", keys, want)
+			}
+		}
+	})
+
+	t.Run("a key before the include is never reported", func(t *testing.T) {
+		t.Parallel()
+		content := "[user]\n\tname = Before Include\n" +
+			"[include]\n\tpath = /some/other/include.gitconfig\n"
+		keys, err := git.IdentityKeysAfterInclude([]byte(content), git.IdentityKeys)
+		if err != nil {
+			t.Fatalf("IdentityKeysAfterInclude() returned an unexpected error: %v", err)
+		}
+		if len(keys) != 0 {
+			t.Fatalf("IdentityKeysAfterInclude() = %v, want no keys", keys)
+		}
+	})
+}
+
 func TestFindGlobalIdentityValues(t *testing.T) {
 	t.Parallel()
 

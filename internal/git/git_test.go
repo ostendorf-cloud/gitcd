@@ -246,3 +246,52 @@ func TestIsRepository(t *testing.T) {
 		}
 	})
 }
+
+func TestWorktrees(t *testing.T) {
+	setupGitEnv(t)
+
+	t.Run("an ordinary clone with no linked worktree reports exactly itself", func(t *testing.T) {
+		root := t.TempDir()
+		source := filepath.Join(root, "source")
+		if err := os.MkdirAll(source, 0o755); err != nil {
+			t.Fatalf("create %s: %v", source, err)
+		}
+		initRepository(t, source)
+
+		paths, err := git.Worktrees(context.Background(), source)
+		if err != nil {
+			t.Fatalf("Worktrees() returned an unexpected error: %v", err)
+		}
+		if len(paths) != 1 {
+			t.Fatalf("Worktrees() = %v, want exactly one entry", paths)
+		}
+	})
+
+	t.Run("a main checkout with a linked worktree reports both", func(t *testing.T) {
+		root := t.TempDir()
+		source := filepath.Join(root, "source")
+		if err := os.MkdirAll(source, 0o755); err != nil {
+			t.Fatalf("create %s: %v", source, err)
+		}
+		initRepository(t, source)
+
+		worktree := filepath.Join(root, "worktree")
+		run(t, source, "worktree", "add", worktree)
+
+		paths, err := git.Worktrees(context.Background(), source)
+		if err != nil {
+			t.Fatalf("Worktrees() returned an unexpected error: %v", err)
+		}
+		if len(paths) != 2 {
+			t.Fatalf("Worktrees() = %v, want exactly two entries", paths)
+		}
+
+		fromWorktree, err := git.Worktrees(context.Background(), worktree)
+		if err != nil {
+			t.Fatalf("Worktrees() from the linked worktree returned an unexpected error: %v", err)
+		}
+		if len(fromWorktree) != 2 {
+			t.Fatalf("Worktrees() from the linked worktree = %v, want exactly two entries", fromWorktree)
+		}
+	})
+}

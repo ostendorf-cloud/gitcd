@@ -290,6 +290,61 @@ func IdentityKeyAfterInclude(content []byte, keys []string) (key string, found b
 	return "", false, nil
 }
 
+// IdentityKeysAfterInclude is IdentityKeyAfterInclude, reporting every
+// key in keys that sits after the last bare "[include]" section, in file
+// order, rather than only the first it finds: "git config --global --add"
+// would insert a new key for any rule into that same section, so a
+// "global-identity-order" finding naming only one of several keys already
+// at risk would understate the problem for no reason.
+func IdentityKeysAfterInclude(content []byte, keys []string) ([]string, error) {
+	lines := strings.Split(string(content), "\n")
+
+	lastIncludeEnd := -1
+	inBareInclude := false
+	for i, line := range lines {
+		if m := configSectionHeader.FindStringSubmatch(line); m != nil {
+			inBareInclude = strings.EqualFold(m[1], "include") && m[2] == ""
+			continue
+		}
+		if inBareInclude {
+			lastIncludeEnd = i
+		}
+	}
+	if lastIncludeEnd == -1 {
+		return nil, nil
+	}
+
+	wanted := make(map[string]string, len(keys))
+	for _, k := range keys {
+		wanted[strings.ToLower(k)] = k
+	}
+
+	var found []string
+	seen := make(map[string]bool, len(keys))
+	section := ""
+	for _, line := range lines[lastIncludeEnd+1:] {
+		if m := configSectionHeader.FindStringSubmatch(line); m != nil {
+			section = strings.ToLower(m[1])
+			continue
+		}
+		if section == "" {
+			continue
+		}
+		m := configKeyLine.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		full := section + "." + strings.ToLower(m[1])
+		key, ok := wanted[full]
+		if !ok || seen[full] {
+			continue
+		}
+		seen[full] = true
+		found = append(found, key)
+	}
+	return found, nil
+}
+
 // GlobalIdentityValue is one identity key the global git configuration
 // sets directly, with the value it carries.
 type GlobalIdentityValue struct {
