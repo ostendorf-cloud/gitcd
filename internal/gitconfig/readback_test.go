@@ -227,6 +227,95 @@ func TestRender_IncludeFileRefusesARuleItCannotRenderLiterally(t *testing.T) {
 	}
 }
 
+// TestRender_ConditionsStayScopedToWhatTheRuleNames reads the rendered
+// include file back with git and checks the conditions git itself finds
+// in it. A rule names one host and one owner, so every condition in the
+// file has to name that host, and the directory condition has to be
+// rooted at the configured root. A host alias and a layout template are
+// interpolated into those conditions as literally as the rule's own
+// fields are, so either can widen them or move them.
+func TestRender_ConditionsStayScopedToWhatTheRuleNames(t *testing.T) {
+	isolateGit(t)
+
+	const (
+		home = "/home/simon"
+		root = "/home/simon/Code"
+	)
+
+	tests := []struct {
+		name    string
+		aliases []string
+		layout  string
+	}{
+		{name: "an alias that is only a wildcard", aliases: []string{"*"}},
+		{name: "an alias holding a wildcard", aliases: []string{"github-*"}},
+		{name: "an alias holding a quote and a line break", aliases: []string{"github.com\" ]\n[includeIf \"gitdir:/"}},
+		{name: "a layout holding a crossing wildcard", layout: "{host}/**/{repo}"},
+		{name: "a layout climbing out of the root", layout: "../../../{host}/{owner}/{repo}"},
+		{name: "a layout holding a quote and a line break", layout: "{host}\" ]\n[includeIf \"gitdir:/\"]\n\tpath = /x\n[x \"/{owner}/{repo}"},
+		{name: "no alias and the default layout"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Config{
+				Root:    root,
+				Default: "{host}/{owner}/{repo}",
+				Hosts: map[string]config.Host{
+					"github.com": {Layout: tt.layout, Aliases: tt.aliases},
+				},
+				Profiles: map[string]config.Profile{"private": {"user.email": "simon@example.test"}},
+				Rules:    []config.Rule{{Host: "github.com", Owner: "acme", Profile: "private"}},
+			}
+
+			var content string
+			if rendered, err := gitconfig.Render(cfg, home); err == nil {
+				content = rendered[gitconfig.IncludePath(home)]
+			}
+			path := writeIfRendered(t, content)
+
+			for _, key := range listKeys(t, path) {
+				condition, _, found := strings.Cut(strings.TrimPrefix(key, "includeif."), ".path")
+				if !found || !strings.HasPrefix(key, "includeif.") {
+					continue
+				}
+				switch {
+				case strings.HasPrefix(condition, "gitdir/i:"):
+					if !strings.HasPrefix(strings.TrimPrefix(condition, "gitdir/i:"), root+"/") {
+						t.Errorf("the include file carries the condition %q, want one rooted at %q", condition, root)
+					}
+				case strings.HasPrefix(condition, "hasconfig:"):
+					if !strings.Contains(condition, "github.com") {
+						t.Errorf("the include file carries the condition %q, want one naming the host the rule names", condition)
+					}
+				default:
+					t.Errorf("the include file carries the condition %q, which gitcd does not render", condition)
+				}
+			}
+		})
+	}
+}
+
+// listKeys returns every key git itself reads out of the config file at
+// path, failing the test when git cannot parse the file at all.
+func listKeys(t *testing.T, path string) []string {
+	t.Helper()
+
+	cmd := exec.CommandContext(context.Background(), "git", "config", "--file", path, "--list", "--name-only")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git config --file %s --list: %v: %s", path, err, out)
+	}
+
+	var keys []string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line != "" {
+			keys = append(keys, line)
+		}
+	}
+	return keys
+}
+
 func TestRender_PathsStayUnderTheManagedDirectory(t *testing.T) {
 	home := "/home/simon"
 	managed := gitconfig.Dir(home) + string(filepath.Separator)

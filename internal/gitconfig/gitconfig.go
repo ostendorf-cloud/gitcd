@@ -53,16 +53,19 @@ type Rendered map[string]string
 // Render renders every profile file and the include file for cfg, with
 // every path resolved under home.
 //
-// Every profile name is validated before it is used, through
-// internal/config's own gate, as well as at load time. A profile name
-// is the one part of a configuration that decides a path rather than
-// file content: ProfilePath builds the rendered file's path out of it,
-// so a name that is not a single path segment would move the file out
-// of the directory gitcd owns and regenerates, to somewhere nothing
-// else here looks. Render is exported and takes a config.Config, so a
-// caller can build one by hand, and the keys of this map are what
-// "apply" then writes.
+// cfg is validated in full before anything is rendered, through
+// config.Config.Validate, the same gate Load applies to a configuration
+// file. Render is exported and takes a config.Config, so a caller can
+// build one by hand, and what this map holds is what "apply" then
+// writes: every profile name that decides a path, every rule field and
+// host alias and layout that decides a condition, and every key and
+// value that decides file content has to be acceptable before any of it
+// is turned into a file.
 func Render(cfg config.Config, home string) (Rendered, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("gitconfig: %w", err)
+	}
+
 	out := Rendered{}
 
 	names := make([]string, 0, len(cfg.Profiles))
@@ -72,9 +75,6 @@ func Render(cfg config.Config, home string) (Rendered, error) {
 	sort.Strings(names)
 
 	for _, name := range names {
-		if err := config.ValidateProfileName(name); err != nil {
-			return nil, fmt.Errorf("gitconfig: %w", err)
-		}
 		content, err := RenderProfile(cfg.Profiles[name], cfg.UseConfigOnly)
 		if err != nil {
 			return nil, fmt.Errorf("gitconfig: render profile %q: %w", name, err)
@@ -82,23 +82,24 @@ func Render(cfg config.Config, home string) (Rendered, error) {
 		out[ProfilePath(home, name)] = content
 	}
 
-	includes, err := renderIncludes(cfg, home)
-	if err != nil {
-		return nil, err
-	}
-	out[IncludePath(home)] = includes
+	out[IncludePath(home)] = renderIncludes(cfg, home)
 	return out, nil
 }
 
 // RenderProfile renders one profile's git configuration file content.
 //
-// Every key and value is validated here as well as at load time, through
-// the same exported gate internal/config applies, and not because a
-// loaded configuration could slip past that one. This function is
-// exported and takes a config.Profile, so a caller can hand it a map it
-// built itself, and a key or value that cannot be rendered correctly
-// must fail here rather than render into a file that parses as something
-// other than what it says.
+// Every key's syntax and every value's characters are validated here as
+// well as at load time: this function is exported and takes a
+// config.Profile, so a caller can hand it a map it built itself, and a
+// key or value that cannot be rendered correctly must fail here rather
+// than render into a file that parses as something other than what it
+// says.
+//
+// The opt in a restricted key needs is deliberately not applied here. A
+// config.Profile carries no allow list, so this function cannot tell a
+// key that was opted in from one that was not; that gate belongs to the
+// configuration as a whole and is applied by config.Config.Validate,
+// which both Load and Render call.
 //
 // When useConfigOnly is true and the profile does not already set its own
 // "user.useConfigOnly", "true" is added: a repository whose identity gitcd
@@ -172,15 +173,15 @@ func RenderProfile(p config.Profile, useConfigOnly bool) (string, error) {
 // successfully under a guessed identity despite every profile file
 // itself setting "useConfigOnly = true".
 //
-// Every rule's host, owner and repo is validated before it is rendered,
-// through internal/config's own gate. The three are interpolated into an
-// "includeIf" condition rather than into a value, so neither quoting nor
-// escaping applies to them: a field holding a quote would close the
-// condition, and one holding a glob metacharacter would match
-// repositories the rule does not name. Both are refused, in both places,
-// for the reason RenderProfile validates: a caller can build a
-// config.Config by hand.
-func renderIncludes(cfg config.Config, home string) (string, error) {
+// Every input that reaches a condition here is validated by
+// config.Config.Validate, which Render calls before this runs: a rule's
+// host, owner and repo, the profile name each path is built from, the
+// host aliases hasconfigGlobs interpolates, and the layout template
+// renderGitdirGlob interpolates. None of the four is written as a value,
+// so neither quoting nor escaping applies to any of them: one holding a
+// quote would close the condition, and one holding a glob metacharacter
+// would match repositories the rule does not name.
+func renderIncludes(cfg config.Config, home string) string {
 	var b strings.Builder
 	b.WriteString(generatedHeader)
 
@@ -189,20 +190,10 @@ func renderIncludes(cfg config.Config, home string) (string, error) {
 	}
 
 	if cfg.DefaultProfile != "" {
-		if err := config.ValidateProfileName(cfg.DefaultProfile); err != nil {
-			return "", fmt.Errorf("gitconfig: render the include file: %w", err)
-		}
 		fmt.Fprintf(&b, "\n[include]\n\tpath = %s\n", quoteValue(ProfilePath(home, cfg.DefaultProfile)))
 	}
 
 	for _, rule := range profile.SortRules(cfg.Rules) {
-		if err := config.ValidateRule(rule); err != nil {
-			return "", fmt.Errorf("gitconfig: render the include file: %w", err)
-		}
-		if err := config.ValidateProfileName(rule.Profile); err != nil {
-			return "", fmt.Errorf("gitconfig: render the include file: %w", err)
-		}
-
 		path := ProfilePath(home, rule.Profile)
 
 		gitdirGlob := renderGitdirGlob(cfg, rule)
@@ -213,7 +204,7 @@ func renderIncludes(cfg config.Config, home string) (string, error) {
 		}
 	}
 
-	return b.String(), nil
+	return b.String()
 }
 
 // placeholderPattern matches a layout template placeholder, the same

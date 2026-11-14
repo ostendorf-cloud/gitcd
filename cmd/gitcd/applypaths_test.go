@@ -70,6 +70,44 @@ func TestRunApply_WritesNowhereButTheManagedDirectory(t *testing.T) {
 	})
 }
 
+// TestRunApply_GivesEveryProfileItsOwnFile asserts on what is on disk
+// after "apply", not on what it rendered or printed. Two profile names
+// that a case insensitive filesystem cannot tell apart map to one path,
+// and the only place that shows up is the file: both rules' "path" lines
+// still point somewhere real, "apply" still prints two paths and still
+// exits 0, and one of the two identities is simply gone.
+func TestRunApply_GivesEveryProfileItsOwnFile(t *testing.T) {
+	profiles := map[string]string{
+		"work": "work@example.test",
+		"Work": "other@example.test",
+	}
+
+	home := setupEnv(t)
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"),
+		"profiles:\n  work:\n    user.email: work@example.test\n"+
+			"  Work:\n    user.email: other@example.test\n"+
+			"\nrules:\n  - host: github.com\n    owner: acme\n    profile: work\n"+
+			"  - host: gitlab.com\n    owner: acme\n    profile: Work\n")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"apply"}, &stdout, &stderr); code != 0 {
+		// Refused, so no file was written under either name and the
+		// identity of neither profile can have been replaced.
+		return
+	}
+
+	for name, email := range profiles {
+		path := filepath.Join(home, ".config", "gitcd", "profiles", name+".gitconfig")
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("apply reported success but did not write %s: %v", path, err)
+		}
+		if !strings.Contains(string(content), email) {
+			t.Errorf("%s holds %q, want the profile %q own address %q", path, content, name, email)
+		}
+	}
+}
+
 // profileAndRule renders a configuration whose single profile, and the
 // single rule naming it, both carry name.
 func profileAndRule(name string) string {
