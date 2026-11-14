@@ -74,6 +74,15 @@ const (
 	// that section, so a key already after it keeps beating every
 	// includeIf value silently.
 	KindGlobalIdentityOrder Kind = "global-identity-order"
+	// KindAncestorCaseConflict is an ancestor directory, shared by two or
+	// more repositories under root, whose repositories disagree on its
+	// spelling: each repository's own remote implies a different case
+	// for the same, physically shared directory. Renaming it to fix one
+	// repository would immediately un-place the other, and the reverse
+	// rename on a later run would un-place the first again, so this is
+	// never Fixable: "doctor --fix" reports it and renames nothing under
+	// that ancestor, rather than flipping the two forever.
+	KindAncestorCaseConflict Kind = "ancestor-case-conflict"
 )
 
 // Finding is one problem doctor reports.
@@ -218,6 +227,114 @@ func checkPath(cfg config.Config, name, path string, repo profile.Repo) []Findin
 	}}
 }
 
+// RepoPath pairs one repository's own on-disk path with the path the
+// configured layout renders for its remote, so CheckAncestorCaseConflicts
+// can compare every repository under root against its siblings, including
+// one that is not itself mismatched: a repository already sitting at the
+// path its own remote implies still needs to be told apart from the one
+// renaming a shared ancestor would place it at by accident.
+type RepoPath struct {
+	// Repo is the repository name, "/" separated relative to root.
+	Repo string
+	// Path is the repository's actual, on-disk path.
+	Path string
+	// Want is the path the configured layout renders for this
+	// repository's own remote, "" when it could not be rendered at all.
+	Want string
+}
+
+// FirstDifferingSegment walks oldPath and newPath component by component
+// and returns the path of the first (topmost) component at which they
+// differ, in each of the two inputs: the ancestor directory a caller
+// renaming oldPath to newPath actually needs to rename, carrying
+// everything below it along in one move, rather than only the leaf. Both
+// return values equal oldPath and newPath themselves when the two share
+// no common prefix at all.
+func FirstDifferingSegment(oldPath, newPath string) (string, string) {
+	oldSegs := strings.Split(filepath.Clean(oldPath), string(filepath.Separator))
+	newSegs := strings.Split(filepath.Clean(newPath), string(filepath.Separator))
+
+	i := 0
+	for i < len(oldSegs) && i < len(newSegs) && oldSegs[i] == newSegs[i] {
+		i++
+	}
+	if i >= len(oldSegs) || i >= len(newSegs) {
+		return oldPath, newPath
+	}
+	return strings.Join(oldSegs[:i+1], string(filepath.Separator)), strings.Join(newSegs[:i+1], string(filepath.Separator))
+}
+
+// CheckAncestorCaseConflicts reports KindAncestorCaseConflict for every
+// ancestor directory that two or more of repos would rename to a
+// different spelling: for each repository whose own path is a case-only
+// mismatch of its own Want, it finds every sibling repository physically
+// under the same ancestor directory and asks what that sibling's own Want
+// implies for the very same ancestor. When siblings disagree, case
+// insensitively equal but not identical, on what that one shared,
+// physical directory should be called, renaming it to fix one would
+// un-place the other, so neither is fixed and this is reported instead.
+// A repository whose Want already equals Path is not itself mismatched,
+// but is still consulted as a sibling: it is the repository a careless
+// rename would newly un-place, exactly the bug this check exists to
+// catch before "doctor --fix" ever makes it.
+func CheckAncestorCaseConflicts(repos []RepoPath) []Finding {
+	var findings []Finding
+	seenAncestor := map[string]bool{}
+
+	for _, rp := range repos {
+		if rp.Want == "" || rp.Path == rp.Want || !strings.EqualFold(rp.Path, rp.Want) {
+			continue
+		}
+		oldAncestor, _ := FirstDifferingSegment(rp.Path, rp.Want)
+		if seenAncestor[oldAncestor] {
+			continue
+		}
+		seenAncestor[oldAncestor] = true
+
+		depth := len(strings.Split(filepath.Clean(oldAncestor), string(filepath.Separator)))
+		wanted := map[string][]string{}
+		for _, sib := range repos {
+			if sib.Want == "" {
+				continue
+			}
+			if sib.Path != oldAncestor && !strings.HasPrefix(sib.Path, oldAncestor+string(filepath.Separator)) {
+				continue
+			}
+			wantSegs := strings.Split(filepath.Clean(sib.Want), string(filepath.Separator))
+			if depth > len(wantSegs) {
+				continue
+			}
+			wantAncestor := strings.Join(wantSegs[:depth], string(filepath.Separator))
+			wanted[wantAncestor] = append(wanted[wantAncestor], sib.Repo)
+		}
+		if len(wanted) < 2 {
+			continue
+		}
+
+		castings := make([]string, 0, len(wanted))
+		for casing := range wanted {
+			castings = append(castings, casing)
+		}
+		sort.Strings(castings)
+		parts := make([]string, 0, len(castings))
+		for _, casing := range castings {
+			names := wanted[casing]
+			sort.Strings(names)
+			parts = append(parts, fmt.Sprintf("%q (%s)", casing, strings.Join(names, ", ")))
+		}
+		findings = append(findings, Finding{
+			Kind: KindAncestorCaseConflict,
+			Path: oldAncestor,
+			Message: fmt.Sprintf(
+				"repositories under %s disagree on how it should be spelled: %s; doctor --fix refuses to rename it, "+
+					"since fixing one of them would un-place the other",
+				oldAncestor, strings.Join(parts, ", "),
+			),
+		})
+	}
+	return findings
+}
+
 // checkRuleCase reports KindRuleCaseMismatch for every rule whose host,
 // owner and repo all match repo's remote case-insensitively but not
 // exactly: profile.Resolve compares owner and repo with a case sensitive
@@ -315,31 +432,45 @@ func managedFileNote(path, includePath string) string {
 // CheckGlobal reports every global identity finding: KindGlobalIdentityKey
 // for each identity key content, the global git configuration's own raw
 // text, sets directly, naming movedProfileTarget as the profile it would
-// belong in, and KindGlobalIdentityOrder when one of them sits after the
-// gitcd include, which would keep winning over every includeIf value
-// silently.
-func CheckGlobal(content []byte, globalPath, movedProfileTarget string) ([]Finding, error) {
+// belong in, and KindGlobalIdentityOrder when one or more of them sit
+// after the gitcd include, which would keep winning over every includeIf
+// value silently.
+//
+// movedProfileTargetExists tells the finding whether movedProfileTarget
+// already names a profile the configuration actually carries: a caller
+// resolves this against its own configuration, since this package never
+// loads one itself. When false, the message says so rather than naming a
+// profile as if the configuration already carried it, which it need not:
+// "gitcd init --move-identity" accepts a "--profile" naming any profile
+// at all, and nothing here can recover which one was chosen in the past
+// for a key moved before this run.
+func CheckGlobal(content []byte, globalPath, movedProfileTarget string, movedProfileTargetExists bool) ([]Finding, error) {
 	var findings []Finding
 
+	belongsIn := fmt.Sprintf("profile %q", movedProfileTarget)
+	if !movedProfileTargetExists {
+		belongsIn = fmt.Sprintf("a profile such as %q, which the configuration does not yet define", movedProfileTarget)
+	}
 	for _, v := range git.FindGlobalIdentityValues(content, git.IdentityKeys) {
 		findings = append(findings, Finding{
 			Kind: KindGlobalIdentityKey,
 			Message: fmt.Sprintf(
-				"%s sets %s = %s directly; \"user.useConfigOnly\" cannot suppress it, so every repository gitcd manages, including one no rule matches, gets this identity; it belongs in profile %q instead",
-				globalPath, v.Key, v.Value, movedProfileTarget,
+				"%s sets %s = %s directly; \"user.useConfigOnly\" cannot suppress it, so every repository gitcd manages, including one no rule matches, gets this identity; it belongs in %s instead",
+				globalPath, v.Key, v.Value, belongsIn,
 			),
 		})
 	}
 
-	key, found, err := git.IdentityKeyAfterInclude(content, git.IdentityKeys)
+	keys, err := git.IdentityKeysAfterInclude(content, git.IdentityKeys)
 	if err != nil {
 		return nil, fmt.Errorf("doctor: check %s for an identity key after the include: %w", globalPath, err)
 	}
-	if found {
+	if len(keys) > 0 {
 		findings = append(findings, Finding{
 			Kind: KindGlobalIdentityOrder,
 			Message: fmt.Sprintf(
-				"%s sets %s after the gitcd include; it would keep beating every includeIf value silently", globalPath, key,
+				"%s sets %s after the gitcd include; a key there keeps beating every includeIf value silently",
+				globalPath, strings.Join(keys, ", "),
 			),
 		})
 	}

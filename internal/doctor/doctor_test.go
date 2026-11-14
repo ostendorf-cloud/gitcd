@@ -274,6 +274,69 @@ func TestCheckRepo(t *testing.T) {
 	})
 }
 
+func TestCheckAncestorCaseConflicts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("two repositories under one ancestor disagree: a conflict, naming both", func(t *testing.T) {
+		t.Parallel()
+		repos := []doctor.RepoPath{
+			{Repo: "github.com/Acme/widget", Path: "/code/github.com/Acme/widget", Want: "/code/github.com/acme/widget"},
+			{Repo: "github.com/Acme/other", Path: "/code/github.com/Acme/other", Want: "/code/github.com/Acme/other"},
+		}
+		findings := doctor.CheckAncestorCaseConflicts(repos)
+		f, ok := findKind(findings, doctor.KindAncestorCaseConflict)
+		if !ok {
+			t.Fatalf("CheckAncestorCaseConflicts() = %+v, want a %s finding", findings, doctor.KindAncestorCaseConflict)
+		}
+		if f.Path != "/code/github.com/Acme" {
+			t.Fatalf("finding Path = %q, want the shared ancestor %q", f.Path, "/code/github.com/Acme")
+		}
+		if !strings.Contains(f.Message, "github.com/Acme/widget") || !strings.Contains(f.Message, "github.com/Acme/other") {
+			t.Fatalf("finding message = %q, want it to name both repositories", f.Message)
+		}
+	})
+
+	t.Run("two repositories under one ancestor that agree: no conflict", func(t *testing.T) {
+		t.Parallel()
+		repos := []doctor.RepoPath{
+			{Repo: "github.com/Acme/widget", Path: "/code/github.com/Acme/widget", Want: "/code/github.com/acme/widget"},
+			{Repo: "github.com/Acme/gadget", Path: "/code/github.com/Acme/gadget", Want: "/code/github.com/acme/gadget"},
+		}
+		findings := doctor.CheckAncestorCaseConflicts(repos)
+		if len(findings) != 0 {
+			t.Fatalf("CheckAncestorCaseConflicts() = %+v, want no findings for an ancestor both repositories agree on", findings)
+		}
+	})
+
+	t.Run("a repository with no sibling under its ancestor: no conflict", func(t *testing.T) {
+		t.Parallel()
+		repos := []doctor.RepoPath{
+			{Repo: "github.com/Acme/widget", Path: "/code/github.com/Acme/widget", Want: "/code/github.com/acme/widget"},
+		}
+		findings := doctor.CheckAncestorCaseConflicts(repos)
+		if len(findings) != 0 {
+			t.Fatalf("CheckAncestorCaseConflicts() = %+v, want no findings with no sibling repository", findings)
+		}
+	})
+
+	t.Run("a repository already at its own wanted path is never itself flagged", func(t *testing.T) {
+		t.Parallel()
+		repos := []doctor.RepoPath{
+			{Repo: "github.com/Acme/widget", Path: "/code/github.com/Acme/widget", Want: "/code/github.com/acme/widget"},
+			{Repo: "github.com/Acme/other", Path: "/code/github.com/Acme/other", Want: "/code/github.com/Acme/other"},
+		}
+		findings := doctor.CheckAncestorCaseConflicts(repos)
+		if _, ok := findKind(findings, doctor.KindAncestorCaseConflict); !ok {
+			t.Fatalf("CheckAncestorCaseConflicts() = %+v, want a conflict finding", findings)
+		}
+		for _, f := range findings {
+			if f.Repo == "github.com/Acme/other" {
+				t.Fatalf("CheckAncestorCaseConflicts() = %+v, want no finding naming the already correct repository as its own subject", findings)
+			}
+		}
+	})
+}
+
 func TestCheckManagedFiles(t *testing.T) {
 	home := setupGitEnv(t)
 
@@ -344,7 +407,7 @@ func TestCheckManagedFiles(t *testing.T) {
 func TestCheckGlobal(t *testing.T) {
 	t.Run("a global identity key is reported, naming the target profile", func(t *testing.T) {
 		content := []byte("[user]\n\temail = [email protected]\n")
-		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global")
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", true)
 		if err != nil {
 			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
 		}
@@ -357,9 +420,24 @@ func TestCheckGlobal(t *testing.T) {
 		}
 	})
 
+	t.Run("a target profile that does not exist yet is named as a suggestion, not as fact", func(t *testing.T) {
+		content := []byte("[user]\n\temail = [email protected]\n")
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", false)
+		if err != nil {
+			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
+		}
+		f, ok := findKind(findings, doctor.KindGlobalIdentityKey)
+		if !ok {
+			t.Fatalf("CheckGlobal() = %+v, want a %s finding", findings, doctor.KindGlobalIdentityKey)
+		}
+		if !strings.Contains(f.Message, "does not yet define") {
+			t.Fatalf("finding message = %q, want it to say the profile is not yet configured", f.Message)
+		}
+	})
+
 	t.Run("a global identity key after the include is reported as an ordering finding too", func(t *testing.T) {
 		content := []byte("[include]\n\tpath = /some/include.gitconfig\n[user]\n\temail = [email protected]\n")
-		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global")
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", true)
 		if err != nil {
 			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
 		}
@@ -368,9 +446,26 @@ func TestCheckGlobal(t *testing.T) {
 		}
 	})
 
+	t.Run("every identity key after the include is named, not only the first", func(t *testing.T) {
+		content := []byte(
+			"[include]\n\tpath = /some/include.gitconfig\n[user]\n\tname = Someone\n\temail = [email protected]\n",
+		)
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", true)
+		if err != nil {
+			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
+		}
+		f, ok := findKind(findings, doctor.KindGlobalIdentityOrder)
+		if !ok {
+			t.Fatalf("CheckGlobal() = %+v, want a %s finding", findings, doctor.KindGlobalIdentityOrder)
+		}
+		if !strings.Contains(f.Message, "user.name") || !strings.Contains(f.Message, "user.email") {
+			t.Fatalf("finding message = %q, want it to name both keys sitting after the include", f.Message)
+		}
+	})
+
 	t.Run("no findings for a global configuration with no identity key at all", func(t *testing.T) {
 		content := []byte("[core]\n\teditor = vim\n")
-		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global")
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", true)
 		if err != nil {
 			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
 		}
