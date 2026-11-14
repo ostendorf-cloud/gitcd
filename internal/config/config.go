@@ -343,23 +343,13 @@ func LoadFrom(path string) (cfg Config, err error) {
 		cfg.UseConfigOnly = *r.UseConfigOnly
 	}
 
-	allowed, err := allowedUnsafeKeys(r.AllowUnsafeKeys)
-	if err != nil {
-		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
-	}
 	cfg.AllowUnsafeKeys = append([]string(nil), r.AllowUnsafeKeys...)
 
 	if len(r.Profiles) > 0 {
 		cfg.Profiles = make(map[string]Profile, len(r.Profiles))
 		for name, keys := range r.Profiles {
-			if err := ValidateProfileName(name); err != nil {
-				return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
-			}
 			profile := make(Profile, len(keys))
 			for key, value := range keys {
-				if err := validateProfileEntry(key, value, allowed); err != nil {
-					return Config{}, fmt.Errorf("config: parse %s: profile %q: %w", path, name, err)
-				}
 				profile[key] = value
 			}
 			cfg.Profiles[name] = profile
@@ -367,30 +357,22 @@ func LoadFrom(path string) (cfg Config, err error) {
 	}
 
 	for _, rr := range r.Rules {
-		rule := Rule{Host: strings.ToLower(rr.Host), Owner: rr.Owner, Repo: rr.Repo, Profile: rr.Profile}
-		if err := ValidateRule(rule); err != nil {
-			return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
-		}
-		if rule.Repo != "" && rule.Owner == "" {
-			return Config{}, fmt.Errorf(
-				"config: parse %s: %w: rule for host %q names a repo without an owner", path, ErrInvalidProfile, rule.Host,
-			)
-		}
-		if _, ok := cfg.Profiles[rule.Profile]; !ok {
-			return Config{}, fmt.Errorf(
-				"config: parse %s: %w: rule for host %q names the undefined profile %q", path, ErrInvalidProfile, rule.Host, rule.Profile,
-			)
-		}
-		cfg.Rules = append(cfg.Rules, rule)
+		cfg.Rules = append(cfg.Rules, Rule{
+			Host: strings.ToLower(rr.Host), Owner: rr.Owner, Repo: rr.Repo, Profile: rr.Profile,
+		})
 	}
 
 	if r.DefaultProfile != nil {
 		cfg.DefaultProfile = *r.DefaultProfile
-		if _, ok := cfg.Profiles[cfg.DefaultProfile]; !ok {
-			return Config{}, fmt.Errorf(
-				"config: parse %s: %w: defaultProfile names the undefined profile %q", path, ErrInvalidProfile, cfg.DefaultProfile,
-			)
-		}
+	}
+
+	// One gate over the assembled configuration, rather than a check per
+	// field as it is decoded: internal/gitconfig.Render calls the same
+	// method on whatever Config it is handed, so a configuration from a
+	// file and one a caller built by hand are held to identical terms,
+	// and neither can gain a field the other validates.
+	if err := cfg.Validate(); err != nil {
+		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 
 	return cfg, nil

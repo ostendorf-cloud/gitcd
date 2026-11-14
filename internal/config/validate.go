@@ -6,6 +6,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -25,61 +27,120 @@ var ErrUnsafeKey = errors.New("config: profile key needs an explicit opt in")
 // own remedy.
 const AllowUnsafeKeysKey = "allowUnsafeKeys"
 
-// unsafeKeyRule is one family of git config key a profile may not carry
-// unless AllowUnsafeKeysKey names it.
+// The restricted set below is expressed as three kinds of family, and
+// never as a list of whole keys. A list cannot describe what has to be
+// described here.
 //
-// Matching is per family rather than per literal key, because the keys
-// in question are not a flat list. "credential" is dangerous as a whole
-// section, including the URL keyed "credential.<url>.helper" form, so no
-// list of full keys could cover it. "process" and "hook" are dangerous
-// wherever they appear, under "filter" today and under whatever section
-// a future git version adds, so they match on the final name and ignore
-// the section. The four "core" entries, by contrast, are genuinely four
-// specific keys, and matching the whole "core" section instead would
-// refuse "core.autocrlf" and the rest of an ordinary profile.
+// Every rule ignores the subsection entirely, and that is what makes a
+// family a family. A git config key that names a command is as often
+// subsection keyed as not: "diff.<driver>.command", "filter.<f>.clean",
+// "pager.<command>", "alias.<name>", "credential.<url>.helper". The
+// subsection in each is a name the user invents, so no enumeration of
+// whole keys reaches them, while a rule on the section and the final
+// name reaches both spellings of the same setting at once.
 //
-// Section and name are compared case insensitively, as git compares them
-// itself: without that, the same key spelled "CORE.sshCommand" would be
-// refused while git still read it back as "core.sshcommand". No rule
-// looks at the subsection, so the one part of a key git does compare
-// case sensitively never decides a match.
-type unsafeKeyRule struct {
-	// section is the section the rule applies to, lowercased, or "" for
-	// a rule that applies under every section.
-	section string
-	// names are the final key names the rule applies to, lowercased, or
-	// empty for a rule covering every key in its section.
-	names []string
-	// why says, functionally, what the key does, so the refusal explains
-	// itself without the reader having to look the key up.
-	why string
+// Section and final name are compared case insensitively, as git
+// compares them itself: without that, the same key spelled
+// "CORE.sshCommand" would be refused while git still read it back as
+// "core.sshcommand". Since no rule reads the subsection, the one part of
+// a key git does compare case sensitively never decides a match.
+
+// unsafeNameSuffixes are the final name endings that denote a command
+// git runs, or a path or destination it resolves on its own, in whatever
+// section they appear.
+//
+// Matching a suffix rather than a whole name is deliberate. git's own
+// naming is compositional: the thing that runs a command is spelled
+// "sshCommand", "alternateRefsCommand", "defaultKeyCommand",
+// "packObjectsHook", "hooksPath". An exact name list has to be extended
+// every time git adds another one, and silently admits the ones nobody
+// thought of, which is how a list of four "core" names came to admit
+// "core.askPass" and "core.hooksPath" sitting beside them. A suffix set
+// covers the spellings git has not invented yet.
+var unsafeNameSuffixes = []string{
+	"askpass",
+	"clean",
+	"cmd",
+	"command",
+	"driver",
+	"editor",
+	"external",
+	"hook",
+	"hookspath",
+	"pager",
+	"process",
+	"program",
+	"proxy",
+	"smudge",
+	"templatedir",
+	"textconv",
+	"variant",
 }
 
-// unsafeKeyRules is the set of key families refused by default.
-var unsafeKeyRules = []unsafeKeyRule{
-	{
-		section: "core",
-		names:   []string{"sshcommand"},
-		why:     "replaces the command git runs to reach a remote",
-	},
-	{
-		section: "core",
-		names:   []string{"pager", "editor", "fsmonitor"},
-		why:     "names a command git runs on its own",
-	},
-	{
-		section: "credential",
-		why:     "takes over how git answers a credential prompt",
-	},
-	{
-		section: "url",
-		names:   []string{"insteadof", "pushinsteadof"},
-		why:     "rewrites the remote URL git actually contacts",
-	},
-	{
-		names: []string{"process", "hook"},
-		why:   "names a command git runs on its own",
-	},
+// unsafeExactNames are final names that denote the same thing but are
+// not composed of a recognisable ending.
+var unsafeExactNames = []string{
+	"allow",
+	"destination",
+	"directory",
+	"fsmonitor",
+	"insteadof",
+	"pushinsteadof",
+}
+
+// unsafeSections are sections in which no key is an identity setting,
+// so the whole section is restricted. "pager" and "alias" hold nothing
+// but command definitions, keyed by a subsection the user invents;
+// "credential" decides where a credential comes from; "url" holds only
+// the two rewriting keys; "safe", "protocol" and "trace2" decide what
+// git trusts, which transports it will use, and where it writes its own
+// trace output.
+var unsafeSections = []string{
+	"alias",
+	"credential",
+	"difftool",
+	"mergetool",
+	"pager",
+	"protocol",
+	"safe",
+	"trace2",
+	"url",
+}
+
+// invertedSections are sections restricted as a whole except for the
+// keys safeCoreNames lists. "core" is one: its keys run from
+// "core.autocrlf", which any profile may set, to "core.sshCommand" and
+// "core.hooksPath", which no profile may set unannounced, and the two
+// groups are not told apart by their spelling. Listing what an ordinary
+// profile legitimately sets, and restricting the rest, is the only way
+// round that puts a key git adds later on the restricted side by
+// default.
+var invertedSections = []string{"core"}
+
+// safeCoreNames are the "core" keys an ordinary profile may carry: the
+// settings that describe how a working tree is stored and compared, none
+// of which names a command, a path git resolves, or a credential.
+var safeCoreNames = []string{
+	"abbrev",
+	"autocrlf",
+	"bare",
+	"bigfilethreshold",
+	"commentchar",
+	"compression",
+	"eol",
+	"excludesfile",
+	"filemode",
+	"ignorecase",
+	"logallrefupdates",
+	"loosecompression",
+	"precomposeunicode",
+	"quotepath",
+	"safecrlf",
+	"sharedrepository",
+	"symlinks",
+	"trustctime",
+	"untrackedcache",
+	"whitespace",
 }
 
 // UnsafeKeyReason reports whether key belongs to a family a profile may
@@ -92,22 +153,35 @@ func UnsafeKeyReason(key string) (string, bool) {
 		return "", false
 	}
 	section, name = strings.ToLower(section), strings.ToLower(name)
-	for _, rule := range unsafeKeyRules {
-		if rule.section != "" && rule.section != section {
-			continue
-		}
-		if len(rule.names) > 0 && !containsFold(rule.names, name) {
-			continue
-		}
-		return rule.why, true
+
+	switch {
+	case contains(unsafeSections, section):
+		return "sets a command or a trust decision rather than an identity", true
+	case contains(invertedSections, section) && !contains(safeCoreNames, name):
+		return "is a \"" + section + "\" key outside the settings a profile describes a working tree with", true
+	case contains(unsafeExactNames, name):
+		return "decides what git trusts or where it resolves something from", true
+	case hasUnsafeSuffix(name):
+		return "names a command git runs on its own", true
 	}
 	return "", false
 }
 
-// containsFold reports whether names, already lowercased, holds name.
-func containsFold(names []string, name string) bool {
-	for _, n := range names {
-		if n == name {
+// hasUnsafeSuffix reports whether name, already lowercased, ends in one
+// of unsafeNameSuffixes.
+func hasUnsafeSuffix(name string) bool {
+	for _, suffix := range unsafeNameSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// contains reports whether values, already lowercased, holds value.
+func contains(values []string, value string) bool {
+	for _, v := range values {
+		if v == value {
 			return true
 		}
 	}
@@ -173,7 +247,10 @@ func SplitKey(key string) (section, subsection, name string, err error) {
 func ValidateProfileKey(key string) error {
 	section, subsection, name, err := SplitKey(key)
 	if err != nil {
-		return fmt.Errorf("%w: %q is not a \"section.key\" git config key", ErrInvalidProfile, key)
+		// SplitKey tells an empty subsection apart from a key that is
+		// not a "section.key" pair at all, so its own message is the
+		// more useful of the two and is kept.
+		return fmt.Errorf("%w: %w", ErrInvalidProfile, err)
 	}
 	if !configKeySection.MatchString(section) {
 		return fmt.Errorf("%w: %q has an invalid section name", ErrInvalidProfile, key)
@@ -328,6 +405,16 @@ func validateProfileEntry(key, value string, allowed map[string]bool) error {
 // whole file.
 var escapableValueRunes = map[rune]bool{'\n': true, '\t': true, '\b': true}
 
+// isControl reports whether r is a control character: the C0 range, DEL,
+// and the C1 range. git parses DEL and C1 without complaint, so refusing
+// them is not about git refusing the file; it is that a value gitcd
+// writes on a person's behalf, which "doctor" later prints and compares,
+// should not carry a character that renders as nothing and compares as
+// something.
+func isControl(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
+}
+
 // ValidateProfileValue reports whether value can be written into a git
 // config file as a double quoted value. The characters git has an escape
 // sequence for are accepted and escaped at render time; every other
@@ -341,7 +428,7 @@ var escapableValueRunes = map[rune]bool{'\n': true, '\t': true, '\b': true}
 // hand.
 func ValidateProfileValue(value string) error {
 	for _, r := range value {
-		if r < 0x20 && !escapableValueRunes[r] {
+		if isControl(r) && !escapableValueRunes[r] {
 			return fmt.Errorf(
 				"%w: a value may not hold the control character %q, which git config has no escape for",
 				ErrInvalidProfile, r,
@@ -390,6 +477,178 @@ func ValidateRule(r Rule) error {
 		}
 		if r.Repo == "." || r.Repo == ".." {
 			return fmt.Errorf("%w: rule repo %q is not a repository name", ErrInvalidProfile, r.Repo)
+		}
+	}
+	return nil
+}
+
+// ValidateHostAlias reports whether alias can be rendered into the
+// include file's conditions. An alias is interpolated into the
+// "hasconfig:remote.*.url:" glob of every rule naming the host it
+// resolves to, in exactly the position the rule's own host occupies, so
+// it is held to the same class as a rule host: a glob metacharacter here
+// widens a rule to every host, which is the widening a literal glob in
+// an owner is refused to prevent.
+func ValidateHostAlias(host, alias string) error {
+	if alias == "" {
+		return fmt.Errorf("%w: host %q has an empty alias", ErrInvalidProfile, host)
+	}
+	if !ruleHost.MatchString(alias) {
+		return fmt.Errorf("%w: alias %q of host %q is not a host name", ErrInvalidProfile, alias, host)
+	}
+	return nil
+}
+
+// layoutPlaceholders are the placeholder names a layout template may
+// carry, the same set internal/layout renders and the same set it
+// already refuses a template outside of.
+var layoutPlaceholders = []string{"host", "owner", "org", "project", "repo"}
+
+// layoutSegment matches one "/" separated segment of a layout template:
+// a run of placeholders and literal characters, where a placeholder is
+// "{name}" and a literal character is a letter, a digit, ".", "-" or
+// "_".
+var layoutSegment = regexp.MustCompile(`^(\{[A-Za-z]+\}|[A-Za-z0-9._-])+$`)
+
+// layoutPlaceholder matches one "{name}" placeholder inside a layout
+// template segment, so each can be checked against layoutPlaceholders.
+var layoutPlaceholder = regexp.MustCompile(`\{([A-Za-z]+)\}`)
+
+// ValidateLayout reports whether a layout template can be rendered into
+// the include file's "gitdir/i:" condition. An empty template is valid
+// and means the generic default applies, the way a host entry clears its
+// own layout.
+//
+// The template's class is not a rule field's. A layout is a path
+// template, so it has to carry "/" between its segments and "{host}"
+// style placeholders inside them, both of which a rule field refuses.
+// What it must not carry is the rest: a quote or a bracket would close
+// the condition the template is rendered into, a glob metacharacter
+// would widen the condition past the rule that named it, and an upward
+// segment would root it outside the configured root, where the rule's
+// profile would then apply to repositories gitcd never placed.
+//
+// Validation is per segment, which is what makes the upward case fall
+// out rather than needing its own scan: ".." is a segment, and so is
+// any placeholder, so each is judged as the whole thing it is.
+func ValidateLayout(where, template string) error {
+	if template == "" {
+		return nil
+	}
+	for _, segment := range strings.Split(template, "/") {
+		switch {
+		case segment == "":
+			return fmt.Errorf("%w: %s layout %q holds an empty path segment", ErrInvalidProfile, where, template)
+		case segment == "." || segment == "..":
+			return fmt.Errorf("%w: %s layout %q holds a relative path segment", ErrInvalidProfile, where, template)
+		case !layoutSegment.MatchString(segment):
+			return fmt.Errorf(
+				"%w: %s layout %q may hold only placeholders, letters, digits, \".\", \"-\", \"_\" and \"/\"",
+				ErrInvalidProfile, where, template,
+			)
+		}
+		for _, name := range layoutPlaceholder.FindAllStringSubmatch(segment, -1) {
+			if !contains(layoutPlaceholders, name[1]) {
+				return fmt.Errorf(
+					"%w: %s layout %q names the unknown placeholder %q", ErrInvalidProfile, where, template, name[0],
+				)
+			}
+		}
+	}
+	return nil
+}
+
+// Validate reports whether every part of c that reaches a generated
+// file can be written into one as written: each profile's name, keys and
+// values, each rule's fields, each host's aliases and layout, and the
+// references rules and defaultProfile make to a profile by name.
+//
+// This is the whole gate in one place, so a Config that came from Load
+// and one a caller built by hand are held to the same terms. Load calls
+// it on the configuration it has just parsed, and
+// internal/gitconfig.Render calls it on whatever it is handed.
+func (c Config) Validate() error {
+	if err := c.validateProfiles(); err != nil {
+		return err
+	}
+	for host, h := range c.Hosts {
+		for _, alias := range h.Aliases {
+			if err := ValidateHostAlias(host, alias); err != nil {
+				return err
+			}
+		}
+		if err := ValidateLayout("host "+host+"'s", h.Layout); err != nil {
+			return err
+		}
+	}
+	if err := ValidateLayout("the default", c.Default); err != nil {
+		return err
+	}
+	for _, rule := range c.Rules {
+		if err := ValidateRule(rule); err != nil {
+			return err
+		}
+		if rule.Repo != "" && rule.Owner == "" {
+			return fmt.Errorf(
+				"%w: rule for host %q names a repo without an owner", ErrInvalidProfile, rule.Host,
+			)
+		}
+		if _, ok := c.Profiles[rule.Profile]; !ok {
+			return fmt.Errorf(
+				"%w: rule for host %q names the undefined profile %q", ErrInvalidProfile, rule.Host, rule.Profile,
+			)
+		}
+	}
+	if c.DefaultProfile != "" {
+		if _, ok := c.Profiles[c.DefaultProfile]; !ok {
+			return fmt.Errorf(
+				"%w: defaultProfile names the undefined profile %q", ErrInvalidProfile, c.DefaultProfile,
+			)
+		}
+	}
+	return nil
+}
+
+// validateProfiles validates every profile name, key and value in c,
+// and refuses two names that differ only in case.
+//
+// The case check is the same reasoning the trailing dot and the trailing
+// space already get. A profile name becomes a file name, and on a case
+// insensitive filesystem, which is macOS's default, "work" and "Work"
+// are one file: whichever profile is rendered second overwrites the
+// first, both rules point their "path" at the surviving file, and the
+// rule naming one profile then applies the other profile's identity with
+// nothing printed to say so.
+func (c Config) validateProfiles() error {
+	names := make([]string, 0, len(c.Profiles))
+	for name := range c.Profiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	allowed, err := allowedUnsafeKeys(c.AllowUnsafeKeys)
+	if err != nil {
+		return err
+	}
+
+	seen := make(map[string]string, len(names))
+	for _, name := range names {
+		if err := ValidateProfileName(name); err != nil {
+			return err
+		}
+		folded := strings.ToLower(name)
+		if first, ok := seen[folded]; ok {
+			return fmt.Errorf(
+				"%w: the profiles %q and %q differ only in case, and would render to one file",
+				ErrInvalidProfile, first, name,
+			)
+		}
+		seen[folded] = name
+
+		for _, key := range c.Profiles[name].Keys() {
+			if err := validateProfileEntry(key, c.Profiles[name][key], allowed); err != nil {
+				return fmt.Errorf("profile %q: %w", name, err)
+			}
 		}
 	}
 	return nil
