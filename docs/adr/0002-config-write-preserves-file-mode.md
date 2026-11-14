@@ -19,11 +19,20 @@ Status: accepted
 The write path stats the resolved write target before creating the temporary file, and
 chmods the temporary file to that mode, whatever it is, before the rename carries it over.
 
-- A target that exists keeps its exact mode, preserved silently, including a mode wider than
-  gitcd would have chosen itself. The fix exists to stop gitcd silently overriding a choice
-  the user made about their own file; flagging that same choice as "surprising" afterwards
-  would reintroduce the same kind of silent judgment call in a milder form. A command run with
-  `--verbose` already logs the path written; `ls -l` tells the rest.
+- A target that exists keeps its nine permission bits, preserved silently, including a mode
+  wider than gitcd would have chosen itself. The fix exists to stop gitcd silently overriding a
+  choice the user made about their own file; flagging that same choice as "surprising"
+  afterwards would reintroduce the same kind of silent judgment call in a milder form. A command
+  run with `--verbose` already logs the path written; `ls -l` tells the rest.
+- The setuid, setgid and sticky bits are not carried across. On a regular, non executable
+  configuration file none of them changes how the file is read or written, and macOS refuses
+  setuid and setgid on such a file before gitcd ever sees it. A sticky bit set on one is
+  therefore dropped by this write. Said here rather than left for the next reader to discover,
+  because the nine bits are what this decision is about.
+- The write is a temporary file renamed over the target, so a configuration reached through a
+  hard link loses that link: the other name keeps the old inode with its old content and mode.
+  That is inherent to writing atomically and is not specific to this decision, but it is the
+  one case where "the file keeps its mode" reads as more than it means.
 - A target that does not exist yet, the first run on a machine with no configuration file at
   all, is created `0o600`. The file holds personal identity data, not a secret, but still
   specific enough to one person that an owner only default beats a world readable one; a user
