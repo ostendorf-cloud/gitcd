@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
+	"sort"
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/scan"
@@ -40,6 +41,34 @@ import (
 //     repository shares that repository's remote and local git
 //     configuration, so fetching or checking one again repeats exactly
 //     what its main checkout's own pass already covered.
+//
+// The result is sorted once here, by repoName, before any caller sees
+// it: the deleted discoverRepos sorted its own results the same way, and
+// every one of its callers inherited that order for free. scan.Walk's
+// own order is stable and reproducible, but it is the order git reports
+// a repository's worktrees in, following a main checkout's own boundary
+// the moment it is found, not necessarily this repository's name among
+// its siblings; a caller comparing two runs, "status" above all, needs
+// the latter. Sorting here, rather than in each of the five callers that
+// would otherwise repeat it, is the same choice this refactor already
+// made for the worktree-visibility rule above: state it once so every
+// caller inherits it, rather than risking five slightly different
+// answers to the same question.
+//
+// repoName, not the absolute path scan.Walk itself carries, is the sort
+// key: it is the exact string "status", "sync", "doctor", "path" and
+// "open" already print, so the printed order is the sorted order by
+// construction, and it compares portably by "/" regardless of the host
+// path separator. Because a linked worktree's own repoName is always
+// either an unrelated name or an extension of its main checkout's own
+// repoName with a "/" appended (such as this organisation's own
+// "<repo>/.claude/worktrees/<branch>" convention), a plain string sort
+// always places that worktree immediately after its main checkout and
+// before any sibling repository whose name sorts later, never scattered
+// elsewhere by whatever order git happened to report it in. A worktree
+// git registers somewhere else entirely under root, unrelated to its
+// main checkout's own name, sorts wherever its own repoName falls
+// instead, exactly like any other repository.
 func scanRepositories(ctx context.Context, cfg config.Config, managedDir string, includeWorktrees bool) ([]scan.Result, error) {
 	results, err := scan.Walk(ctx, cfg.Root, cfg, managedDir)
 	if err != nil {
@@ -53,6 +82,9 @@ func scanRepositories(ctx context.Context, cfg config.Config, managedDir string,
 		}
 		kept = append(kept, res)
 	}
+	sort.Slice(kept, func(i, j int) bool {
+		return repoName(cfg.Root, kept[i].Repo.Path) < repoName(cfg.Root, kept[j].Repo.Path)
+	})
 	return kept, nil
 }
 

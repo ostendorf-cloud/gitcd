@@ -11,7 +11,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"sort"
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
@@ -83,7 +82,9 @@ func runList(args []string, stdout, stderr io.Writer) int {
 // scanRepositories found, hiding a linked worktree unless withWorktrees
 // is set: the one exception to every other command's rule, since a
 // worktree is not itself a distinct clone someone maintains in the fleet
-// listing. See scanRepositories's own doc comment.
+// listing. See scanRepositories's own doc comment. The order is
+// scanRepositories's own: it is already sorted by name, so this function
+// does not sort a second time.
 func listEntries(ctx context.Context, cfg config.Config, managedDir string, withWorktrees bool, logger *slog.Logger) ([]listEntry, error) {
 	results, err := scanRepositories(ctx, cfg, managedDir, withWorktrees)
 	if err != nil {
@@ -99,6 +100,5 @@ func listEntries(ctx context.Context, cfg config.Config, managedDir string, with
 			Worktree: res.Repo.IsWorktree,
 		})
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 	return entries, nil
 }
