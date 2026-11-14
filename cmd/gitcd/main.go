@@ -32,6 +32,8 @@ Commands:
   status       print branch, dirty and ahead or behind state for every repository
   sync         fetch every repository with a bounded pool, never pulling or merging
   open         open a repository's remote in a browser
+  doctor       report identity and layout drift across every repository
+  adopt        move an existing clone into the layout and fix its config
   shell-init   print the shell integration snippet for zsh, bash or fish
   version      print the version
 
@@ -71,6 +73,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runSync(args[1:], stdout, stderr)
 	case "open":
 		return runOpen(args[1:], stdout, stderr)
+	case "doctor":
+		return runDoctor(args[1:], stdout, stderr)
+	case "adopt":
+		return runAdopt(args[1:], os.Stdin, stdout, stderr)
 	case "shell-init":
 		return runShellInit(args[1:], stdout, stderr)
 	case "help", "-h", "--help":

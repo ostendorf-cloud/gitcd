@@ -24,16 +24,18 @@ not repeated here.
 - `internal/gitsync/`: fetches a set of repositories through a bounded pool of workers; never
   pulls, rebases or merges. Named apart from `sync` so no caller shadows the standard library
   package of that name.
+- `internal/doctor/`: detects identity drift, a repository at a path the layout would not
+  render, a missing or stale managed file and a global identity key. Detection only; the
+  command layer writes.
 - `internal/scan/`: walks the configured root into the repository values `list` and `cd`
   consume, stopping at a repository boundary, a `.git` entry, file or directory alike, and
   asking git for the linked worktrees that boundary skips past.
 - `internal/shell/`: the per shell init snippet `shell-init` prints, including the `cd` tab
   completion registered for zsh and fish.
 
-`doctor` and `adopt` are a later milestone, tracked as an issue; their own packages land with
-it. `cmd/gitcd/discover.go` walks the configured root for `status`, `sync` and `open`, while
-`internal/scan` walks the same ground for `list` and `cd` with a richer value; issue #15
-reconciles the two into one.
+Two walks over the configured root still exist: `cmd/gitcd/discover.go` serves `status`, `sync`,
+`open` and `doctor`, while `internal/scan` serves `list` and `cd` with a richer value and finds
+linked worktrees the other does not. Issue #15 reconciles them into one.
 
 ## Commands
 

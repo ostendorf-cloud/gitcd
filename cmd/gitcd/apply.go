@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -52,30 +53,45 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	paths := make([]string, 0, len(rendered))
-	for path := range rendered {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
 	if *dryRun {
+		paths := make([]string, 0, len(rendered))
+		for path := range rendered {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
 		for _, path := range paths {
 			fmt.Fprintf(stdout, "%s:\n%s\n", path, rendered[path])
 		}
 		return 0
 	}
 
+	if err := writeRenderedFiles(rendered, logger, stdout); err != nil {
+		fmt.Fprintf(stderr, "gitcd apply: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// writeRenderedFiles writes every path in rendered, creating its parent
+// directory first, in a deterministic order: the mechanical write both
+// "gitcd apply" and "gitcd doctor --fix" perform, kept in one place so
+// the two never drift into two different ways of doing the same write.
+func writeRenderedFiles(rendered gitconfig.Rendered, logger *slog.Logger, stdout io.Writer) error {
+	paths := make([]string, 0, len(rendered))
+	for path := range rendered {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
 	for _, path := range paths {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			fmt.Fprintf(stderr, "gitcd apply: create %s: %v\n", filepath.Dir(path), err)
-			return 1
+			return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 		}
 		if err := os.WriteFile(path, []byte(rendered[path]), 0o644); err != nil {
-			fmt.Fprintf(stderr, "gitcd apply: write %s: %v\n", path, err)
-			return 1
+			return fmt.Errorf("write %s: %w", path, err)
 		}
 		logger.Debug("wrote a managed file", "path", path)
 		fmt.Fprintln(stdout, path)
 	}
-	return 0
+	return nil
 }

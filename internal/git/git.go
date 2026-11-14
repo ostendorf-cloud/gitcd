@@ -64,7 +64,7 @@ func RemoteURL(ctx context.Context, path string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", path, "config", "--get", "remote.origin.url")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("git: read the origin remote of %s: %w", path, err)
+		return "", fmt.Errorf("git: read the origin remote of %s: %w", path, foldStderr(err))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -76,14 +76,30 @@ func IsRepository(path string) bool {
 	return err == nil
 }
 
+// IsBareRepository reports whether path is itself a bare repository: no
+// ".git" entry of its own, path holding git's administrative files
+// ("HEAD", "objects", "refs") directly, exactly what IsRepository does
+// not expect. It is meant to be called only once IsRepository has
+// already reported false, to tell that case apart from a path that is
+// not a git repository at all: asking git to inspect a directory that
+// is neither exits non-zero too, read the same as "no" here.
+func IsBareRepository(ctx context.Context, path string) bool {
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--is-bare-repository")
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
 // Worktrees runs "git -C path worktree list --porcelain" and returns the
 // absolute path of every worktree git has registered for the repository at
-// path, path's own main checkout included: git's own registry is
-// authoritative for this, and reading it back costs one subprocess call
-// per repository rather than a directory walk that would have to look
-// inside a path a repository boundary rule otherwise always skips past,
-// such as a linked worktree nested inside its own repository's working
-// tree.
+// path, path's own main checkout first and then every linked worktree, in
+// the order git itself reports them: git's own registry is authoritative
+// for this, and reading it back costs one subprocess call per repository
+// rather than a directory walk that would have to look inside a path a
+// repository boundary rule otherwise always skips past, such as a linked
+// worktree nested inside its own repository's working tree. A caller
+// refusing to move a repository that still has a linked worktree, or that
+// is one itself, reads the same list to tell those apart from an ordinary
+// clone with no worktree of its own.
 func Worktrees(ctx context.Context, path string) ([]string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", path, "worktree", "list", "--porcelain")
 	out, err := cmd.Output()

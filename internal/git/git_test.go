@@ -200,6 +200,39 @@ func TestRemoteURL_IsNotResolvedThroughAnInsteadOfRewrite(t *testing.T) {
 	}
 }
 
+// TestRemoteURL_FoldsGitsOwnStderrIntoTheError guards against RemoteURL
+// wrapping a failing "git config --get" only as the standard library's
+// own bare "exit status 128", dropping the diagnostic line git itself
+// printed saying why. An ordinary empty, non repository directory
+// produces no stderr at all for this exact invocation ("git config
+// --get" without "--local" simply reports "key not found" rather than
+// requiring a repository), so it cannot exercise this fold; an orphaned
+// linked worktree, the same fixture config_test.go's own "folds git's
+// own stderr" test for Dir uses, reliably does.
+func TestRemoteURL_FoldsGitsOwnStderrIntoTheError(t *testing.T) {
+	setupGitEnv(t)
+
+	root := t.TempDir()
+	initRepository(t, root)
+	worktree := filepath.Join(root, "..", "worktree")
+	run(t, root, "worktree", "add", worktree)
+
+	// The main checkout is gone: every git invocation inside the
+	// worktree now fails with git's own diagnostic ("fatal: not a git
+	// repository: (null)"), rather than succeeding.
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatalf("remove %s: %v", root, err)
+	}
+
+	_, err := git.RemoteURL(context.Background(), worktree)
+	if err == nil {
+		t.Fatal("RemoteURL() on an orphaned linked worktree = nil error, want one naming why")
+	}
+	if !strings.Contains(err.Error(), "fatal:") {
+		t.Fatalf("RemoteURL() error = %q, want git's own stderr folded in, not a bare \"exit status 128\"", err.Error())
+	}
+}
+
 func TestIsRepository(t *testing.T) {
 	setupGitEnv(t)
 
@@ -243,6 +276,87 @@ func TestIsRepository(t *testing.T) {
 		}
 		if !git.IsRepository(worktree) {
 			t.Fatalf("IsRepository(%q) = false, want true for a linked worktree", worktree)
+		}
+	})
+}
+
+func TestIsBareRepository(t *testing.T) {
+	setupGitEnv(t)
+
+	t.Run("a bare repository is reported as bare", func(t *testing.T) {
+		bare := t.TempDir()
+		run(t, bare, "init", "--bare", "--initial-branch=main")
+
+		if git.IsRepository(bare) {
+			t.Fatalf("IsRepository(%q) = true, want false for a bare repository", bare)
+		}
+		if !git.IsBareRepository(context.Background(), bare) {
+			t.Fatalf("IsBareRepository(%q) = false, want true", bare)
+		}
+	})
+
+	t.Run("an ordinary clone is not bare", func(t *testing.T) {
+		root := t.TempDir()
+		initRepository(t, root)
+
+		if git.IsBareRepository(context.Background(), root) {
+			t.Fatalf("IsBareRepository(%q) = true, want false for an ordinary clone", root)
+		}
+	})
+
+	t.Run("a plain directory that is not a repository at all is not bare", func(t *testing.T) {
+		dir := t.TempDir()
+		if git.IsBareRepository(context.Background(), dir) {
+			t.Fatalf("IsBareRepository(%q) = true, want false for a plain directory", dir)
+		}
+	})
+}
+
+func TestWorktrees(t *testing.T) {
+	setupGitEnv(t)
+
+	t.Run("an ordinary clone with no linked worktree reports exactly itself", func(t *testing.T) {
+		root := t.TempDir()
+		source := filepath.Join(root, "source")
+		if err := os.MkdirAll(source, 0o755); err != nil {
+			t.Fatalf("create %s: %v", source, err)
+		}
+		initRepository(t, source)
+
+		paths, err := git.Worktrees(context.Background(), source)
+		if err != nil {
+			t.Fatalf("Worktrees() returned an unexpected error: %v", err)
+		}
+		if len(paths) != 1 {
+			t.Fatalf("Worktrees() = %v, want exactly one entry", paths)
+		}
+	})
+
+	t.Run("a main checkout with a linked worktree reports both", func(t *testing.T) {
+		root := t.TempDir()
+		source := filepath.Join(root, "source")
+		if err := os.MkdirAll(source, 0o755); err != nil {
+			t.Fatalf("create %s: %v", source, err)
+		}
+		initRepository(t, source)
+
+		worktree := filepath.Join(root, "worktree")
+		run(t, source, "worktree", "add", worktree)
+
+		paths, err := git.Worktrees(context.Background(), source)
+		if err != nil {
+			t.Fatalf("Worktrees() returned an unexpected error: %v", err)
+		}
+		if len(paths) != 2 {
+			t.Fatalf("Worktrees() = %v, want exactly two entries", paths)
+		}
+
+		fromWorktree, err := git.Worktrees(context.Background(), worktree)
+		if err != nil {
+			t.Fatalf("Worktrees() from the linked worktree returned an unexpected error: %v", err)
+		}
+		if len(fromWorktree) != 2 {
+			t.Fatalf("Worktrees() from the linked worktree = %v, want exactly two entries", fromWorktree)
 		}
 	})
 }

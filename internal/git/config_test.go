@@ -191,6 +191,61 @@ func TestLocalConfig(t *testing.T) {
 	})
 }
 
+func TestConfigGetLocalBool(t *testing.T) {
+	setupGitEnv(t)
+
+	t.Run("reports true for every spelling git itself accepts", func(t *testing.T) {
+		for _, spelling := range []string{"true", "yes", "on", "1"} {
+			root := t.TempDir()
+			initRepository(t, root)
+			run(t, root, "config", "--local", "extensions.worktreeConfig", spelling)
+
+			got, ok, err := git.ConfigGetLocalBool(context.Background(), root, "extensions.worktreeConfig")
+			if err != nil {
+				t.Fatalf("ConfigGetLocalBool() returned an unexpected error: %v", err)
+			}
+			if !ok {
+				t.Fatal("ConfigGetLocalBool() ok = false, want true for a key that is set")
+			}
+			if !got {
+				t.Fatalf("ConfigGetLocalBool() for %q = false, want true", spelling)
+			}
+		}
+	})
+
+	t.Run("reports false for every negative spelling", func(t *testing.T) {
+		for _, spelling := range []string{"false", "no", "off", "0"} {
+			root := t.TempDir()
+			initRepository(t, root)
+			run(t, root, "config", "--local", "extensions.worktreeConfig", spelling)
+
+			got, ok, err := git.ConfigGetLocalBool(context.Background(), root, "extensions.worktreeConfig")
+			if err != nil {
+				t.Fatalf("ConfigGetLocalBool() returned an unexpected error: %v", err)
+			}
+			if !ok {
+				t.Fatal("ConfigGetLocalBool() ok = false, want true for a key that is set")
+			}
+			if got {
+				t.Fatalf("ConfigGetLocalBool() for %q = true, want false", spelling)
+			}
+		}
+	})
+
+	t.Run("ok is false for a key that is not set at all", func(t *testing.T) {
+		root := t.TempDir()
+		initRepository(t, root)
+
+		got, ok, err := git.ConfigGetLocalBool(context.Background(), root, "extensions.worktreeConfig")
+		if err != nil {
+			t.Fatalf("ConfigGetLocalBool() returned an unexpected error: %v", err)
+		}
+		if ok {
+			t.Fatalf("ConfigGetLocalBool() ok = true, got = %v, want ok = false for an unset key", got)
+		}
+	})
+}
+
 func TestShowOrigin(t *testing.T) {
 	setupGitEnv(t)
 
@@ -266,6 +321,28 @@ func TestDirAndCommonDir(t *testing.T) {
 			t.Fatalf("Dir() = CommonDir() = %q, want a linked worktree's own git directory to differ from the shared common directory", dir)
 		}
 	})
+
+	t.Run("an orphaned linked worktree folds git's own stderr into the error", func(t *testing.T) {
+		root := t.TempDir()
+		initRepository(t, root)
+		worktree := filepath.Join(root, "..", "worktree")
+		run(t, root, "worktree", "add", worktree)
+
+		// The main checkout is gone: every git invocation inside the
+		// worktree now fails with git's own diagnostic ("fatal: not a
+		// git repository: (null)"), rather than succeeding.
+		if err := os.RemoveAll(root); err != nil {
+			t.Fatalf("remove %s: %v", root, err)
+		}
+
+		_, err := git.Dir(context.Background(), worktree)
+		if err == nil {
+			t.Fatal("Dir() on an orphaned linked worktree = nil error, want one naming why")
+		}
+		if !strings.Contains(err.Error(), "fatal:") {
+			t.Fatalf("Dir() error = %q, want git's own stderr folded in, not a bare \"exit status 128\"", err.Error())
+		}
+	})
 }
 
 func TestIdentityKeyAfterInclude(t *testing.T) {
@@ -339,6 +416,54 @@ func TestIdentityKeyAfterInclude(t *testing.T) {
 // --add" always inserts a new key into that last matching section, so an
 // identity key sitting between two include sections ends up before the
 // insertion point, safe, while one sitting after both does not.
+
+func TestIdentityKeysAfterInclude(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no include section at all reports no keys", func(t *testing.T) {
+		t.Parallel()
+		content := "[user]\n\tname = Test User\n\temail = [email protected]\n"
+		keys, err := git.IdentityKeysAfterInclude([]byte(content), git.IdentityKeys)
+		if err != nil {
+			t.Fatalf("IdentityKeysAfterInclude() returned an unexpected error: %v", err)
+		}
+		if len(keys) != 0 {
+			t.Fatalf("IdentityKeysAfterInclude() = %v, want no keys", keys)
+		}
+	})
+
+	t.Run("every identity key after the include is reported, not only the first", func(t *testing.T) {
+		t.Parallel()
+		content := "[include]\n\tpath = /some/other/include.gitconfig\n" +
+			"[user]\n\tname = After Include\n\temail = [email protected]\n\tsigningkey = ssh-ed25519 AAAATRAILING\n"
+		keys, err := git.IdentityKeysAfterInclude([]byte(content), git.IdentityKeys)
+		if err != nil {
+			t.Fatalf("IdentityKeysAfterInclude() returned an unexpected error: %v", err)
+		}
+		want := []string{"user.name", "user.email", "user.signingkey"}
+		if len(keys) != len(want) {
+			t.Fatalf("IdentityKeysAfterInclude() = %v, want %v", keys, want)
+		}
+		for i, k := range want {
+			if keys[i] != k {
+				t.Fatalf("IdentityKeysAfterInclude() = %v, want %v", keys, want)
+			}
+		}
+	})
+
+	t.Run("a key before the include is never reported", func(t *testing.T) {
+		t.Parallel()
+		content := "[user]\n\tname = Before Include\n" +
+			"[include]\n\tpath = /some/other/include.gitconfig\n"
+		keys, err := git.IdentityKeysAfterInclude([]byte(content), git.IdentityKeys)
+		if err != nil {
+			t.Fatalf("IdentityKeysAfterInclude() returned an unexpected error: %v", err)
+		}
+		if len(keys) != 0 {
+			t.Fatalf("IdentityKeysAfterInclude() = %v, want no keys", keys)
+		}
+	})
+}
 
 func TestFindGlobalIdentityValues(t *testing.T) {
 	t.Parallel()

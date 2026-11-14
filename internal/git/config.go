@@ -95,6 +95,25 @@ func ConfigGetLocal(ctx context.Context, path, key string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// ConfigGetLocalBool runs "git -C path config --local --type=bool --get
+// key" and reports the boolean value git itself normalises any of its
+// accepted spellings ("true", "yes", "on", "1", and their opposites) to.
+// ok is false when key carries no local value at all, which is not an
+// error: a repository with no local "extensions.worktreeConfig" at all is
+// the common case "adopt" expects, not a failure.
+func ConfigGetLocalBool(ctx context.Context, path, key string) (value bool, ok bool, err error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "config", "--local", "--type=bool", "--get", key)
+	out, runErr := cmd.Output()
+	if runErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) && exitErr.ExitCode() == 1 {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("git: read local %s in %s: %w", key, path, runErr)
+	}
+	return strings.TrimSpace(string(out)) == "true", true, nil
+}
+
 // ConfigUnsetLocal runs "git -C path config --local --unset-all key",
 // removing every local value key carries. It wraps ErrConfigKeyNotSet,
 // rather than failing, when key already carries no local value: a caller
@@ -192,9 +211,25 @@ func revParsePath(ctx context.Context, path, arg string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--path-format=absolute", arg)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("git: rev-parse %s in %s: %w", arg, path, err)
+		return "", fmt.Errorf("git: rev-parse %s in %s: %w", arg, path, foldStderr(err))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// foldStderr folds the standard error output "exec.Cmd.Output" captured
+// onto a failing command's *exec.ExitError into the error itself, when
+// there is any: left alone, err.Error() renders only the bare "exit
+// status 128" the standard library's own ExitError carries, dropping the
+// one line git itself printed saying why, such as "fatal: not a git
+// repository" for a worktree whose main checkout no longer exists. err
+// is returned unchanged when it is not an *exec.ExitError, or carries no
+// captured output at all.
+func foldStderr(err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
+	}
+	return err
 }
 
 // configSectionHeader matches a git config section header line, capturing
@@ -269,6 +304,61 @@ func IdentityKeyAfterInclude(content []byte, keys []string) (key string, found b
 		}
 	}
 	return "", false, nil
+}
+
+// IdentityKeysAfterInclude is IdentityKeyAfterInclude, reporting every
+// key in keys that sits after the last bare "[include]" section, in file
+// order, rather than only the first it finds: "git config --global --add"
+// would insert a new key for any rule into that same section, so a
+// "global-identity-order" finding naming only one of several keys already
+// at risk would understate the problem for no reason.
+func IdentityKeysAfterInclude(content []byte, keys []string) ([]string, error) {
+	lines := strings.Split(string(content), "\n")
+
+	lastIncludeEnd := -1
+	inBareInclude := false
+	for i, line := range lines {
+		if m := configSectionHeader.FindStringSubmatch(line); m != nil {
+			inBareInclude = strings.EqualFold(m[1], "include") && m[2] == ""
+			continue
+		}
+		if inBareInclude {
+			lastIncludeEnd = i
+		}
+	}
+	if lastIncludeEnd == -1 {
+		return nil, nil
+	}
+
+	wanted := make(map[string]string, len(keys))
+	for _, k := range keys {
+		wanted[strings.ToLower(k)] = k
+	}
+
+	var found []string
+	seen := make(map[string]bool, len(keys))
+	section := ""
+	for _, line := range lines[lastIncludeEnd+1:] {
+		if m := configSectionHeader.FindStringSubmatch(line); m != nil {
+			section = strings.ToLower(m[1])
+			continue
+		}
+		if section == "" {
+			continue
+		}
+		m := configKeyLine.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		full := section + "." + strings.ToLower(m[1])
+		key, ok := wanted[full]
+		if !ok || seen[full] {
+			continue
+		}
+		seen[full] = true
+		found = append(found, key)
+	}
+	return found, nil
 }
 
 // GlobalIdentityValue is one identity key the global git configuration
