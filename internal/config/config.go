@@ -55,8 +55,24 @@ var ErrInvalidProfile = errors.New("config: invalid profile configuration")
 var configKeySection = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
 
 // configKeyName matches the final segment of a git config key, after its
-// last ".".
+// last ".", and a key's subsection, which ValidateProfileKey holds to the
+// same character class.
 var configKeyName = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+
+// ruleHost matches a rule's host: a host name, with no glob
+// metacharacter, no quote and no path separator, so it cannot widen the
+// glob or close the condition it is rendered into.
+var ruleHost = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
+
+// ruleSegment matches one segment of a rule's owner, and a rule's repo
+// whole, on the same terms as ruleHost.
+var ruleSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// profileName matches a profile name, which becomes one path segment:
+// the name of the file "apply" renders the profile to. It has to begin
+// and end with a letter or a digit, so the rendered file is neither
+// hidden nor named in a form Windows silently rewrites.
+var profileName = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`)
 
 // Profile is one named identity: a map from a git config key, in
 // "section.key" form, to the string value it should carry. Values are git
@@ -72,31 +88,6 @@ type Rule struct {
 	Owner   string
 	Repo    string
 	Profile string
-}
-
-// validateConfigKey reports whether key is a syntactically valid git config
-// key in "section.key" form, and rejects a key under the "remote" section:
-// a profile applied through includeIf's hasconfig condition must never
-// carry a remote URL, since that would make the condition depend on its
-// own consequence.
-func validateConfigKey(key string) error {
-	firstDot := strings.Index(key, ".")
-	lastDot := strings.LastIndex(key, ".")
-	if firstDot <= 0 || lastDot == len(key)-1 {
-		return fmt.Errorf("config: %w: %q is not a \"section.key\" git config key", ErrInvalidProfile, key)
-	}
-	section := key[:firstDot]
-	name := key[lastDot+1:]
-	if !configKeySection.MatchString(section) {
-		return fmt.Errorf("config: %w: %q has an invalid section name", ErrInvalidProfile, key)
-	}
-	if !configKeyName.MatchString(name) {
-		return fmt.Errorf("config: %w: %q has an invalid key name", ErrInvalidProfile, key)
-	}
-	if strings.EqualFold(section, "remote") {
-		return fmt.Errorf("config: %w: %q sets a remote.* key, which a profile may not carry", ErrInvalidProfile, key)
-	}
-	return nil
 }
 
 // Host is one entry of the "hosts" map: the per host path layout, the SSH
@@ -141,6 +132,12 @@ type Config struct {
 	// refuses to commit rather than falling back to a machine wide
 	// identity. True unless the file opts out with "useConfigOnly: false".
 	UseConfigOnly bool
+	// AllowUnsafeKeys are the git config keys the file opts back in, one
+	// by one, out of the families a profile may not otherwise carry, in
+	// the spelling the file used. Every entry names one key: a wildcard
+	// is not accepted, and an entry naming a key that is not refused by
+	// default is an error rather than a no-op, so a typo is visible.
+	AllowUnsafeKeys []string
 }
 
 // Default returns the configuration applied when no file exists.
@@ -188,6 +185,8 @@ type raw struct {
 	Rules          []rawRule                    `yaml:"rules"`
 	DefaultProfile *string                      `yaml:"defaultProfile"`
 	UseConfigOnly  *bool                        `yaml:"useConfigOnly"`
+
+	AllowUnsafeKeys []string `yaml:"allowUnsafeKeys"`
 }
 
 // Load reads the first of ~/.gitcd.yaml and $XDG_CONFIG_HOME/gitcd/config.yaml
@@ -344,12 +343,21 @@ func LoadFrom(path string) (cfg Config, err error) {
 		cfg.UseConfigOnly = *r.UseConfigOnly
 	}
 
+	allowed, err := allowedUnsafeKeys(r.AllowUnsafeKeys)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	cfg.AllowUnsafeKeys = append([]string(nil), r.AllowUnsafeKeys...)
+
 	if len(r.Profiles) > 0 {
 		cfg.Profiles = make(map[string]Profile, len(r.Profiles))
 		for name, keys := range r.Profiles {
+			if err := ValidateProfileName(name); err != nil {
+				return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
+			}
 			profile := make(Profile, len(keys))
 			for key, value := range keys {
-				if err := validateConfigKey(key); err != nil {
+				if err := validateProfileEntry(key, value, allowed); err != nil {
 					return Config{}, fmt.Errorf("config: parse %s: profile %q: %w", path, name, err)
 				}
 				profile[key] = value
@@ -360,8 +368,8 @@ func LoadFrom(path string) (cfg Config, err error) {
 
 	for _, rr := range r.Rules {
 		rule := Rule{Host: strings.ToLower(rr.Host), Owner: rr.Owner, Repo: rr.Repo, Profile: rr.Profile}
-		if rule.Host == "" {
-			return Config{}, fmt.Errorf("config: parse %s: %w: a rule needs a host", path, ErrInvalidProfile)
+		if err := ValidateRule(rule); err != nil {
+			return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
 		}
 		if rule.Repo != "" && rule.Owner == "" {
 			return Config{}, fmt.Errorf(
