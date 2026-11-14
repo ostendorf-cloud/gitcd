@@ -33,6 +33,15 @@ import (
 // unmatched repository's own, exactly the bug this move exists to fix.
 const defaultMovedProfileName = "global"
 
+// defaultConfigMode is the mode a write through moveGlobalIdentity gives
+// cfgPath when no file sits there yet to carry a mode forward: a user
+// identity, name, email and signing key identifier rather than a secret,
+// still personal enough that a conservative, owner only default beats a
+// world readable one. Documented alongside the preservation behavior in
+// docs/adr/0002-config-write-preserves-file-mode.md. Every later write
+// instead keeps whatever mode the file already had; see moveGlobalIdentity.
+const defaultConfigMode = 0o600
+
 // runInit implements "gitcd init". Beyond adding the "include.path" line
 // described below, it first detects every identity key the global git
 // configuration sets directly: "user.useConfigOnly" only stops git from
@@ -377,6 +386,36 @@ func moveGlobalIdentity(
 		return fmt.Errorf("create %s: %w", filepath.Dir(cfgPath), err)
 	}
 
+	// cfgPath may itself be a symlink, the common shape for a
+	// configuration tracked in a separate dotfiles repository: renaming
+	// a file onto a symlink's own path replaces the link with an
+	// ordinary file, silently detaching it from whatever it pointed at.
+	// Resolving it first and writing through the resolved path keeps the
+	// link itself, and the dotfiles copy it points at, intact. A cfgPath
+	// that does not exist yet, the first run on a machine with no
+	// configuration file at all, is not a symlink to resolve, and is
+	// written at cfgPath directly. Resolved before the temporary file
+	// below is even created: the mode that matters, next, is this
+	// target's own, not a symlink's, which carries none of its own.
+	writeTarget := cfgPath
+	if resolved, err := filepath.EvalSymlinks(cfgPath); err == nil {
+		writeTarget = resolved
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("resolve %s: %w", cfgPath, err)
+	}
+
+	// writeTarget keeps the mode it already had: a configuration file
+	// the user set to, say, 0o600 on purpose must come back 0o600, not
+	// silently widened by this write. writeTarget not existing yet is
+	// not an error here, only the first-run case defaultConfigMode
+	// exists for.
+	mode := os.FileMode(defaultConfigMode)
+	if info, err := os.Stat(writeTarget); err == nil {
+		mode = info.Mode().Perm()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat %s: %w", writeTarget, err)
+	}
+
 	// Written to a temporary file first and validated with config.LoadFrom
 	// before it ever reaches cfgPath: writing an updated configuration
 	// that then fails to load, for instance because the file already
@@ -401,11 +440,9 @@ func moveGlobalIdentity(
 	}
 	tmpPath := tmpFile.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
-	// os.CreateTemp creates its file 0o600; the configuration file this
-	// temporary copy stands in for is written 0o644, so match that
-	// before the rename below carries this file's own mode over to
-	// cfgPath.
-	if err := tmpFile.Chmod(0o644); err != nil {
+	// os.CreateTemp creates its file 0o600; set it to the mode the
+	// rename below must carry onto writeTarget instead, computed above.
+	if err := tmpFile.Chmod(mode); err != nil {
 		_ = tmpFile.Close()
 		return fmt.Errorf("set permissions on %s: %w", tmpPath, err)
 	}
@@ -435,21 +472,6 @@ func moveGlobalIdentity(
 		return fmt.Errorf("the write that was supposed to move %s did not, aborting before touching %s: %w", describeIdentityKeys(found), globalPath, err)
 	}
 
-	// cfgPath may itself be a symlink, the common shape for a
-	// configuration tracked in a separate dotfiles repository: renaming
-	// a file onto a symlink's own path replaces the link with an
-	// ordinary file, silently detaching it from whatever it pointed at.
-	// Resolving it first and writing through the resolved path keeps the
-	// link itself, and the dotfiles copy it points at, intact. A cfgPath
-	// that does not exist yet, the first run on a machine with no
-	// configuration file at all, is not a symlink to resolve, and is
-	// written at cfgPath directly.
-	writeTarget := cfgPath
-	if resolved, err := filepath.EvalSymlinks(cfgPath); err == nil {
-		writeTarget = resolved
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("resolve %s: %w", cfgPath, err)
-	}
 	if err := os.Rename(tmpPath, writeTarget); err != nil {
 		return fmt.Errorf("write %s: %w", writeTarget, err)
 	}

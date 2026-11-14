@@ -894,6 +894,131 @@ func TestIdentityKeysLanded(t *testing.T) {
 	})
 }
 
+// TestRunInit_PreservesAnExistingConfigFileMode is the acceptance proof
+// for issue 16: a pre-existing ~/.gitcd.yaml set to 0o600 on purpose must
+// come back 0o600 after a move, not the 0o644 the write path used to
+// hardcode. os.Chmod below sets the exact bits requested; unlike a mode
+// passed to a creating call such as os.OpenFile, it is never masked by
+// the process umask, so this assertion holds regardless of what umask
+// the test happens to run under.
+func TestRunInit_PreservesAnExistingConfigFileMode(t *testing.T) {
+	home := setupEnv(t)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	writeFile(t, cfgPath, "profiles:\n  work:\n    user.email: work@example.test\nrules:\n  - host: github.com\n    profile: work\n")
+	if err := os.Chmod(cfgPath, 0o600); err != nil {
+		t.Fatalf("chmod %s: %v", cfgPath, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("init --move-identity=yes = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	info, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("stat %s: %v", cfgPath, err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("%s mode after a move = %o, want it unchanged at 0600", cfgPath, got)
+	}
+}
+
+// TestRunInit_PreservesAWideConfigFileModeSilently covers the decision
+// that a mode wider than gitcd would pick itself, 0o666 here, is kept
+// exactly as is rather than narrowed: the fix exists to stop gitcd
+// overriding a permission choice the user made, and that holds
+// regardless of which direction the override would have gone.
+func TestRunInit_PreservesAWideConfigFileModeSilently(t *testing.T) {
+	home := setupEnv(t)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	writeFile(t, cfgPath, "profiles:\n  work:\n    user.email: work@example.test\nrules:\n  - host: github.com\n    profile: work\n")
+	if err := os.Chmod(cfgPath, 0o666); err != nil {
+		t.Fatalf("chmod %s: %v", cfgPath, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("init --move-identity=yes = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	info, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("stat %s: %v", cfgPath, err)
+	}
+	if got := info.Mode().Perm(); got != 0o666 {
+		t.Fatalf("%s mode after a move = %o, want it unchanged at 0666", cfgPath, got)
+	}
+}
+
+// TestRunInit_PreservesConfigModeThroughASymlink covers the same
+// preservation through the dotfiles symlink shape already exercised by
+// TestRunInit_WritesThroughASymlinkedGitcdYAMLRatherThanReplacingIt: the
+// mode that must be preserved is the symlink target's own, set here to
+// 0o600, not whatever the link itself reports.
+func TestRunInit_PreservesConfigModeThroughASymlink(t *testing.T) {
+	home := setupEnv(t)
+	dotfilesCopy := filepath.Join(home, "dotfiles", "gitcd.yaml")
+	writeFile(t, dotfilesCopy, "profiles:\n  work:\n    user.email: work@example.test\n")
+	if err := os.Chmod(dotfilesCopy, 0o600); err != nil {
+		t.Fatalf("chmod %s: %v", dotfilesCopy, err)
+	}
+
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+	if err := os.Symlink(dotfilesCopy, cfgPath); err != nil {
+		t.Fatalf("symlink %s -> %s: %v", cfgPath, dotfilesCopy, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("init --move-identity=yes = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	info, err := os.Stat(dotfilesCopy)
+	if err != nil {
+		t.Fatalf("stat %s: %v", dotfilesCopy, err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("%s mode after a move through the symlink = %o, want it unchanged at 0600", dotfilesCopy, got)
+	}
+
+	// The mode read through the symlink itself must agree: it is the
+	// same file.
+	viaLink, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("stat %s: %v", cfgPath, err)
+	}
+	if got := viaLink.Mode().Perm(); got != 0o600 {
+		t.Fatalf("%s mode via the symlink = %o, want 0600", cfgPath, got)
+	}
+}
+
+// TestRunInit_CreatesANewConfigFileWithTheDefaultMode covers the other
+// half of issue 16: a configuration file created where none existed
+// before gets defaultConfigMode, documented in
+// docs/adr/0002-config-write-preserves-file-mode.md, rather than whatever
+// mode os.CreateTemp or an old hardcoded chmod happened to leave it at.
+func TestRunInit_CreatesANewConfigFileWithTheDefaultMode(t *testing.T) {
+	home := setupEnv(t)
+	cfgPath := filepath.Join(home, ".gitcd.yaml")
+
+	var stdout, stderr bytes.Buffer
+	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("init --move-identity=yes = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	info, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("stat %s: %v", cfgPath, err)
+	}
+	if got := info.Mode().Perm(); got != defaultConfigMode {
+		t.Fatalf("new %s mode = %o, want the documented default %o", cfgPath, got, defaultConfigMode)
+	}
+}
+
 func TestRunInit_NeverWritesToTheRealHomeDirectory(t *testing.T) {
 	// A sanity check on this test file's own isolation, not gitcd's
 	// behaviour: every init test above must run with os.UserHomeDir()

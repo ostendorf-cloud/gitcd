@@ -41,7 +41,9 @@
 - `internal/layout` renders a path template against a parsed remote, and maps a path back to
   one, per host with a shared default.
 - `internal/config` loads `~/.gitcd.yaml`, the file a person edits, separate from
-  `~/.config/gitcd/`, the directory gitcd owns and regenerates.
+  `~/.config/gitcd/`, the directory gitcd owns and regenerates. A write to it, `init
+  --move-identity` today, keeps the file's existing mode, created `0o600` the first time it
+  does not exist yet; see `docs/adr/0002-config-write-preserves-file-mode.md`.
 - `internal/git` shells out to the git CLI for clone, fetch, status and config reads and
   writes, rather than linking a git implementation.
 - `internal/gitconfig` renders the managed config files gitcd writes; `internal/profile`
