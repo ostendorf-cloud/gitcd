@@ -52,6 +52,16 @@ type Rendered map[string]string
 
 // Render renders every profile file and the include file for cfg, with
 // every path resolved under home.
+//
+// Every profile name is validated before it is used, through
+// internal/config's own gate, as well as at load time. A profile name
+// is the one part of a configuration that decides a path rather than
+// file content: ProfilePath builds the rendered file's path out of it,
+// so a name that is not a single path segment would move the file out
+// of the directory gitcd owns and regenerates, to somewhere nothing
+// else here looks. Render is exported and takes a config.Config, so a
+// caller can build one by hand, and the keys of this map are what
+// "apply" then writes.
 func Render(cfg config.Config, home string) (Rendered, error) {
 	out := Rendered{}
 
@@ -62,6 +72,9 @@ func Render(cfg config.Config, home string) (Rendered, error) {
 	sort.Strings(names)
 
 	for _, name := range names {
+		if err := config.ValidateProfileName(name); err != nil {
+			return nil, fmt.Errorf("gitconfig: %w", err)
+		}
 		content, err := RenderProfile(cfg.Profiles[name], cfg.UseConfigOnly)
 		if err != nil {
 			return nil, fmt.Errorf("gitconfig: render profile %q: %w", name, err)
@@ -69,12 +82,25 @@ func Render(cfg config.Config, home string) (Rendered, error) {
 		out[ProfilePath(home, name)] = content
 	}
 
-	out[IncludePath(home)] = renderIncludes(cfg, home)
+	includes, err := renderIncludes(cfg, home)
+	if err != nil {
+		return nil, err
+	}
+	out[IncludePath(home)] = includes
 	return out, nil
 }
 
-// RenderProfile renders one profile's git configuration file content. When
-// useConfigOnly is true and the profile does not already set its own
+// RenderProfile renders one profile's git configuration file content.
+//
+// Every key and value is validated here as well as at load time, through
+// the same exported gate internal/config applies, and not because a
+// loaded configuration could slip past that one. This function is
+// exported and takes a config.Profile, so a caller can hand it a map it
+// built itself, and a key or value that cannot be rendered correctly
+// must fail here rather than render into a file that parses as something
+// other than what it says.
+//
+// When useConfigOnly is true and the profile does not already set its own
 // "user.useConfigOnly", "true" is added: a repository whose identity gitcd
 // cannot determine then refuses to commit rather than falling back to a
 // machine wide identity.
@@ -100,9 +126,15 @@ func RenderProfile(p config.Profile, useConfigOnly bool) (string, error) {
 	currentSection, currentSubsection := "", ""
 	wroteHeader := false
 	for _, key := range keys {
-		section, subsection, name, err := splitKey(key)
+		if err := config.ValidateProfileKey(key); err != nil {
+			return "", fmt.Errorf("gitconfig: %w", err)
+		}
+		if err := config.ValidateProfileValue(entries[key]); err != nil {
+			return "", fmt.Errorf("gitconfig: key %q: %w", key, err)
+		}
+		section, subsection, name, err := config.SplitKey(key)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("gitconfig: %w", err)
 		}
 		if !wroteHeader || section != currentSection || subsection != currentSubsection {
 			if subsection == "" {
@@ -139,7 +171,16 @@ func RenderProfile(p config.Profile, useConfigOnly bool) (string, error) {
 // repository under neither a rule nor a default profile committed
 // successfully under a guessed identity despite every profile file
 // itself setting "useConfigOnly = true".
-func renderIncludes(cfg config.Config, home string) string {
+//
+// Every rule's host, owner and repo is validated before it is rendered,
+// through internal/config's own gate. The three are interpolated into an
+// "includeIf" condition rather than into a value, so neither quoting nor
+// escaping applies to them: a field holding a quote would close the
+// condition, and one holding a glob metacharacter would match
+// repositories the rule does not name. Both are refused, in both places,
+// for the reason RenderProfile validates: a caller can build a
+// config.Config by hand.
+func renderIncludes(cfg config.Config, home string) (string, error) {
 	var b strings.Builder
 	b.WriteString(generatedHeader)
 
@@ -148,10 +189,20 @@ func renderIncludes(cfg config.Config, home string) string {
 	}
 
 	if cfg.DefaultProfile != "" {
+		if err := config.ValidateProfileName(cfg.DefaultProfile); err != nil {
+			return "", fmt.Errorf("gitconfig: render the include file: %w", err)
+		}
 		fmt.Fprintf(&b, "\n[include]\n\tpath = %s\n", quoteValue(ProfilePath(home, cfg.DefaultProfile)))
 	}
 
 	for _, rule := range profile.SortRules(cfg.Rules) {
+		if err := config.ValidateRule(rule); err != nil {
+			return "", fmt.Errorf("gitconfig: render the include file: %w", err)
+		}
+		if err := config.ValidateProfileName(rule.Profile); err != nil {
+			return "", fmt.Errorf("gitconfig: render the include file: %w", err)
+		}
+
 		path := ProfilePath(home, rule.Profile)
 
 		gitdirGlob := renderGitdirGlob(cfg, rule)
@@ -162,7 +213,7 @@ func renderIncludes(cfg config.Config, home string) string {
 		}
 	}
 
-	return b.String()
+	return b.String(), nil
 }
 
 // placeholderPattern matches a layout template placeholder, the same
@@ -347,27 +398,30 @@ func repoPathVariants(owner, repo string) []string {
 	}
 }
 
-// splitKey splits a profile's "section.key" or "section.subsection.key"
-// git config key into its parts, consistent with the "section.key"
-// validation internal/config already applies to every profile key.
-func splitKey(key string) (section, subsection, name string, err error) {
-	first := strings.Index(key, ".")
-	last := strings.LastIndex(key, ".")
-	if first <= 0 || last == len(key)-1 {
-		return "", "", "", fmt.Errorf("gitconfig: %q is not a \"section.key\" git config key", key)
-	}
-	if first == last {
-		return key[:first], "", key[first+1:], nil
-	}
-	return key[:first], key[first+1 : last], key[last+1:], nil
-}
-
 // quoteValue double quotes value for use as a git config value or path,
-// escaping the two characters quoting itself introduces. Quoting is always
-// valid git config syntax, so this never needs to special case a value
-// that happens not to need it.
+// escaping the characters that would otherwise end the value early or be
+// read back as something else. Quoting is always valid git config syntax,
+// so this never needs to special case a value that happens not to need
+// it.
+//
+// The backslash and the quote are escaped because quoting itself
+// introduces them. The three control characters are escaped because a
+// value is written on one line: a line break inside the quotes ends the
+// line rather than the value, and git then refuses the whole file, which
+// for a file reached through an include means every git command in every
+// repository the include matches fails until it is repaired by hand.
+// Verified against git 2.54.0: "\n", "\t" and "\b" read back as the
+// control character, a literal line break inside the quotes does not
+// parse at all. Every other control character has no escape git reads
+// back, so config.ValidateProfileValue refuses it instead, and
+// RenderProfile applies that gate before reaching here.
 func quoteValue(value string) string {
-	escaped := strings.ReplaceAll(value, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-	return `"` + escaped + `"`
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+		"\n", `\n`,
+		"\t", `\t`,
+		"\b", `\b`,
+	)
+	return `"` + replacer.Replace(value) + `"`
 }
