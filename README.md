@@ -34,6 +34,7 @@ gitcd clone git@github.com:acme/widget.git # equally, from any accepted remote f
 gitcd path widget                          # the path of a repository cloned by its exact name
 gitcd path github.com/acme/widget          # the path of a repository cloned under this host
 eval "$(gitcd shell-init zsh)"             # wrap the binary so clone and path change directory
+Invoke-Expression (gitcd shell-init pwsh | Out-String) # the same, in PowerShell's $PROFILE
 gitcd version
 ```
 
