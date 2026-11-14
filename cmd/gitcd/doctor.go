@@ -153,11 +153,16 @@ func collectFindings(ctx context.Context, cfg config.Config, home string, logger
 		findings = append(findings, repoFindings...)
 
 		// want is computed again here, rather than threaded out of
-		// CheckRepo, so every repository, matched or not, feeds
-		// CheckAncestorCaseConflicts below: a repository already sitting
-		// at the path its own remote implies carries no finding of its
-		// own, yet is exactly the one a careless ancestor rename would
-		// un-place, so it still has to be in this list.
+		// CheckRepo, so a repository already sitting at the path its own
+		// remote implies, which carries no finding of its own, still
+		// feeds CheckAncestorCaseConflicts below: it is exactly the one
+		// a careless ancestor rename would un-place, so it still has to
+		// be in this list. A repository CheckRepo itself failed on, no
+		// origin remote being the common case, is already reported
+		// loudly on stderr above and excluded from this roster too by
+		// the "continue" above: a known limitation, since it then casts
+		// no vote in the ancestor check either, and an ancestor rename
+		// could in principle carry it along silently.
 		want, err := wantPath(ctx, cfg, path)
 		if err != nil {
 			continue
@@ -252,14 +257,27 @@ func applyFixes(
 			fmt.Fprintf(stdout, "would rename %s to %s\n", oldAncestor, newAncestor)
 			outstanding = append(outstanding, f)
 		case f.Kind == doctor.KindPathCase:
-			oldAncestor, newAncestor, err := renameCaseOnly(f.Path, f.WantPath)
+			oldAncestor, newAncestor, moved, err := renameCaseOnly(f.Path, f.WantPath)
 			if err != nil {
 				fmt.Fprintf(stderr, "gitcd doctor: %v\n", err)
 				outstanding = append(outstanding, f)
 				continue
 			}
-			fmt.Fprintf(stdout, "renamed %s to %s\n", oldAncestor, newAncestor)
-			fixed = append(fixed, f)
+			if moved {
+				fmt.Fprintf(stdout, "renamed %s to %s\n", oldAncestor, newAncestor)
+			}
+			// renameCaseOnly only ever moves the topmost differing
+			// segment, so a repository differing at more than one
+			// segment is not fully placed by this one call: the
+			// finding stays outstanding, correctly keeping the exit
+			// code non-zero, until a later run reaches the deeper
+			// segment too.
+			actual := newAncestor + strings.TrimPrefix(f.Path, oldAncestor)
+			if actual == f.WantPath {
+				fixed = append(fixed, f)
+			} else {
+				outstanding = append(outstanding, f)
+			}
 		default:
 			outstanding = append(outstanding, f)
 		}
@@ -293,33 +311,80 @@ func rerenderManagedFiles(cfg config.Config, home string, logger *slog.Logger, s
 // one, so a plain two-argument rename cannot be relied on to force the
 // change on every filesystem alike.
 //
-// When the topmost differing ancestor no longer exists at its old path
-// but already exists at the new one, it was already renamed by an
-// earlier call in the same "doctor --fix" run, fixing a sibling
-// repository under the same mis-cased ancestor: this call is then a
-// no-op rather than an error.
-func renameCaseOnly(oldPath, newPath string) (oldAncestor, newAncestor string, err error) {
+// moved reports whether this call itself performed that rename. It is
+// false for the no-op case described next, and whenever err is not nil:
+// only a call that actually moved something on disk reports true.
+//
+// When newAncestor's own, exact spelling already exists as an entry of
+// its parent directory, it was already renamed by an earlier call in
+// the same "doctor --fix" run, fixing a sibling repository under the
+// same mis-cased ancestor: this call is then a no-op rather than an
+// error. That exact spelling is read back from the parent directory's
+// own entries, through entryExistsExactly, rather than asked of
+// "os.Stat" directly: a case insensitive but case preserving filesystem,
+// the common case on macOS (APFS), resolves "GitHub.com" and
+// "github.com" to the very same entry through "os.Stat" alone, so an
+// earlier version of this check that asked only whether oldAncestor had
+// stopped existing never saw that happen there, fell through to the
+// real rename below regardless, and printed a second, spurious "moved"
+// result for a rename that had, in effect, already happened.
+//
+// Renaming only the topmost differing segment means a repository
+// differing from its wanted path at more than one segment is not fully
+// placed by one call: the caller compares the resulting path against
+// the finding's own WantPath and must not report it fixed until they
+// match, which can take more than one "doctor --fix" run to reach.
+func renameCaseOnly(oldPath, newPath string) (oldAncestor, newAncestor string, moved bool, err error) {
 	oldAncestor, newAncestor = doctor.FirstDifferingSegment(oldPath, newPath)
 	if oldAncestor == newAncestor {
-		return oldAncestor, newAncestor, nil
+		return oldAncestor, newAncestor, false, nil
 	}
-	if _, statErr := os.Stat(oldAncestor); errors.Is(statErr, os.ErrNotExist) {
-		if _, statErr := os.Stat(newAncestor); statErr == nil {
-			return oldAncestor, newAncestor, nil
-		}
+	if entryExistsExactly(newAncestor) {
+		return oldAncestor, newAncestor, false, nil
 	}
 
 	tmp := oldAncestor + ".gitcd-doctor-rename-tmp"
 	if err := os.Rename(oldAncestor, tmp); err != nil {
-		return oldAncestor, newAncestor, fmt.Errorf("rename %s to a temporary name: %w", oldAncestor, err)
+		return oldAncestor, newAncestor, false, fmt.Errorf("rename %s to a temporary name: %w", oldAncestor, err)
 	}
 	if err := os.Rename(tmp, newAncestor); err != nil {
 		// Best effort restore, so a failed second hop does not leave the
 		// repository sitting at an unexpected temporary name.
 		_ = os.Rename(tmp, oldAncestor)
-		return oldAncestor, newAncestor, fmt.Errorf("rename %s to %s: %w", oldAncestor, newAncestor, err)
+		return oldAncestor, newAncestor, false, fmt.Errorf("rename %s to %s: %w", oldAncestor, newAncestor, err)
 	}
-	return oldAncestor, newAncestor, nil
+	return oldAncestor, newAncestor, true, nil
+}
+
+// entryExistsExactly reports whether path's own final segment already
+// exists, spelled exactly as path itself spells it, as an entry of its
+// parent directory. "os.Stat" cannot answer this on a case insensitive
+// but case preserving filesystem, the common case on macOS (APFS): it
+// resolves two different spellings of the same name to the very same
+// entry, so it cannot tell a directory already spelled correctly apart
+// from one that merely happens to fold to the same name. Reading the
+// parent directory back and comparing each entry's own, exact name can,
+// on either kind of filesystem, the same technique
+// TestRunDoctor_FixRenamesACaseOnlyPathMismatch's own test helper
+// already relies on for the very same reason.
+//
+// A parent directory that cannot be read at all, because it does not
+// exist yet for instance, is read as "not found" here rather than as an
+// error: the real rename attempt that follows surfaces that failure on
+// its own, correctly, rather than this check silently doing nothing in
+// its place.
+func entryExistsExactly(path string) bool {
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return false
+	}
+	want := filepath.Base(path)
+	for _, e := range entries {
+		if e.Name() == want {
+			return true
+		}
+	}
+	return false
 }
 
 // wantPath renders the path the configured layout would place path's own

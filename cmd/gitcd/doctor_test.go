@@ -329,6 +329,37 @@ func TestRunDoctor_FixRenameMessageNamesTheAncestorNotTheRepoPath(t *testing.T) 
 	}
 }
 
+func TestRunDoctor_FixPrintsTheSharedAncestorRenameExactlyOnce(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	// Two repositories share one mis-cased owner ancestor, and both
+	// remotes agree it should read lowercase: renameCaseOnly's own call
+	// for "widget" renames the shared ancestor; its call for "gadget"
+	// must recognise that ancestor is already correctly spelled and
+	// print nothing a second time, on every filesystem alike, including
+	// a case insensitive but case preserving one (APFS, the macOS
+	// default), where "os.Stat" alone cannot tell "ACME" and "acme"
+	// apart.
+	widget := filepath.Join(root, "github.com", "ACME", "widget")
+	initRepository(t, widget)
+	runGit(t, widget, "remote", "add", "origin", "https://github.com/acme/widget.git")
+	gadget := filepath.Join(root, "github.com", "ACME", "gadget")
+	initRepository(t, gadget)
+	runGit(t, gadget, "remote", "add", "origin", "https://github.com/acme/gadget.git")
+
+	var stdout, stderr bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdout, &stderr)
+
+	oldAncestor := filepath.Join(root, "github.com", "ACME")
+	newAncestor := filepath.Join(root, "github.com", "acme")
+	wantLine := fmt.Sprintf("renamed %s to %s", oldAncestor, newAncestor)
+	if got := strings.Count(stdout.String(), wantLine); got != 1 {
+		t.Fatalf("doctor --fix stdout contains %q %d times, want exactly once: %q", wantLine, got, stdout.String())
+	}
+}
+
 func TestRunDoctor_FixRefusesAContestedAncestorAndConverges(t *testing.T) {
 	home := setupEnv(t)
 	root := filepath.Join(home, "Code")
@@ -496,6 +527,97 @@ func TestRunDoctor_FixesTheSameLeafMismatchWithNoAncestorConflict(t *testing.T) 
 	run([]string{"doctor", "--fix"}, &stdout2, &stderr2)
 	if strings.Contains(stdout2.String(), "renamed") {
 		t.Fatalf("doctor --fix (run 2) stdout = %q, want no further rename: the tree already converged", stdout2.String())
+	}
+}
+
+// ownerEntryName reads the exact, on-disk spelling of the owner
+// directory ("acme" or "Acme") under root/github.com: os.Stat alone
+// cannot tell the two spellings apart on a case insensitive, case
+// preserving filesystem (APFS, the macOS default), since it resolves
+// both to the same entry either way. Reading the parent directory back
+// reports the entry's own, exact spelling, the same technique
+// TestRunDoctor_FixRenamesACaseOnlyPathMismatch already relies on.
+func ownerEntryName(t *testing.T, root string) string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(root, "github.com"))
+	if err != nil {
+		t.Fatalf("read %s: %v", filepath.Join(root, "github.com"), err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("directory entries under %s = %v, want exactly one", filepath.Join(root, "github.com"), entries)
+	}
+	return entries[0].Name()
+}
+
+func TestRunDoctor_FixNeverReportsFixedOrExitsZeroForAStillMisplacedTwoSegmentMismatch(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	// Two segments differ at once: the host ("GitHub.com" instead of
+	// "github.com") and the owner ("Acme" instead of "acme").
+	// renameCaseOnly only ever renames the topmost differing segment per
+	// call, the host here, so one "--fix" run cannot fully place this
+	// repository.
+	misCased := filepath.Join(root, "GitHub.com", "Acme", "widget")
+	initRepository(t, misCased)
+	runGit(t, misCased, "remote", "add", "origin", "https://github.com/acme/widget.git")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"doctor", "--fix"}, &stdout, &stderr)
+
+	if code == 0 {
+		t.Fatalf("doctor --fix = 0, want non-zero: the repository is still misplaced after one run, stdout: %s", stdout.String())
+	}
+
+	// Only the host segment was renamed; the owner segment must still
+	// read "Acme", the exact, on-disk spelling, not merely something
+	// "os.Stat" resolves on a case insensitive filesystem.
+	if got := ownerEntryName(t, root); got != "Acme" {
+		t.Fatalf("owner directory entry = %q, want it still spelled %q after only one run", got, "Acme")
+	}
+	wantAfterOneRun := filepath.Join(root, "github.com", "Acme", "widget")
+	if _, err := os.Stat(wantAfterOneRun); err != nil {
+		t.Fatalf("doctor --fix did not rename the host segment to %s: %v", wantAfterOneRun, err)
+	}
+
+	out := stdout.String()
+	if strings.Contains(out, "fixed [path-case-mismatch]") {
+		t.Fatalf("doctor --fix stdout = %q, want no \"fixed [path-case-mismatch]\" line: the repository is still misplaced", out)
+	}
+}
+
+func TestRunDoctor_FixConvergesOnATwoSegmentMismatchOverSeveralRuns(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	misCased := filepath.Join(root, "GitHub.com", "Acme", "widget")
+	initRepository(t, misCased)
+	runGit(t, misCased, "remote", "add", "origin", "https://github.com/acme/widget.git")
+
+	var stdout1, stderr1 bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdout1, &stderr1)
+	if got := ownerEntryName(t, root); got != "Acme" {
+		t.Fatalf("owner directory entry after run 1 = %q, want convergence to take more than one run", got)
+	}
+
+	var stdout2, stderr2 bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdout2, &stderr2)
+	if got := ownerEntryName(t, root); got != "acme" {
+		t.Fatalf("owner directory entry after run 2 = %q, want %q: doctor --fix did not converge", got, "acme")
+	}
+	if _, err := os.Stat(filepath.Join(root, "github.com", "acme", "widget")); err != nil {
+		t.Fatalf("doctor --fix (run 2) did not converge to the fully placed path: %v", err)
+	}
+	if !strings.Contains(stdout2.String(), "fixed [path-case-mismatch]") {
+		t.Fatalf("doctor --fix (run 2) stdout = %q, want the finding reported as fixed once fully placed", stdout2.String())
+	}
+
+	var stdout3, stderr3 bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdout3, &stderr3)
+	if strings.Contains(stdout3.String(), "renamed") {
+		t.Fatalf("doctor --fix (run 3) stdout = %q, want no further rename: the tree already converged", stdout3.String())
 	}
 }
 

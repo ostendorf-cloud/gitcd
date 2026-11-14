@@ -275,6 +275,27 @@ func TestRunAdopt_RefusesABareRepositoryWithAnAccurateMessage(t *testing.T) {
 	}
 }
 
+func TestRunAdopt_RefusesAMissingPathAsMissingNotAsNotAGitRepository(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	// Never created at all, not even an empty directory.
+	missing := filepath.Join(home, "elsewhere", "widget")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"adopt", "--yes", missing}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("adopt on a missing path = 0, want a refusal")
+	}
+	if !strings.Contains(stderr.String(), "does not exist") {
+		t.Fatalf("adopt stderr = %q, want it to say the path does not exist", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "is not a git repository") {
+		t.Fatalf("adopt stderr = %q, want it to stop claiming a missing path is not a git repository", stderr.String())
+	}
+}
+
 func TestRunAdopt_RefusesAnOrphanedLinkedWorktreeWithGitsOwnReasonFoldedIn(t *testing.T) {
 	home := setupEnv(t)
 	root := filepath.Join(home, "Code")

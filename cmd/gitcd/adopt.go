@@ -76,6 +76,10 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if !git.IsRepository(oldPath) {
+		if _, statErr := os.Stat(oldPath); errors.Is(statErr, os.ErrNotExist) {
+			fmt.Fprintf(stderr, "gitcd adopt: %s does not exist\n", oldPath)
+			return 1
+		}
 		if git.IsBareRepository(ctx, oldPath) {
 			fmt.Fprintf(stderr, "gitcd adopt: %s is a bare repository; adopt does not support one\n", oldPath)
 			return 1
