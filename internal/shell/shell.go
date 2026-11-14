@@ -122,10 +122,15 @@ end
 // inside it, verified here by calling a function with this exact
 // early-return shape against a deliberately failing native command and
 // reading $? immediately afterward. $LASTEXITCODE is therefore the one
-// signal this function actually preserves for the caller, the PowerShell
-// equivalent of bashLike's "|| return $?"; returning immediately on a non
-// zero exit, before Test-Path or anything else runs, keeps the real
-// binary's own call the last thing that could have set it.
+// exit status this function actually preserves for the caller, the
+// PowerShell equivalent of bashLike's "|| return $?". The early return
+// also guards something besides an exit code, though: on a failing
+// "clone", "path" or "cd", $real is empty, and without the early return,
+// the switch below would still call "Test-Path -LiteralPath $real",
+// which raises a visible non terminating error for a null or empty path,
+// confirmed by calling Test-Path that way directly. Returning immediately
+// on a non zero exit avoids that error and keeps the real binary's own
+// call the last thing that could have set $LASTEXITCODE.
 const powerShell = `function gitcd {
     $gitcdPath = (Get-Command gitcd -CommandType Application | Select-Object -First 1).Source
     $real = & $gitcdPath @args

@@ -43,9 +43,10 @@ func resolvePwsh() string {
 // what that text actually does once PowerShell runs it: the function
 // lands in the session's scope, "clone" and "cd" actually "cd", a
 // "--dry-run" clone actually does not, a failing command actually
-// propagates its exit code without printing anything, a pass through
-// command's output actually survives, and the "cd" completer actually
-// fires for "cd" and not for an unrelated subcommand.
+// propagates its exit code without printing anything and without raising
+// a PowerShell error of its own, a pass through command's output
+// actually survives, and the "cd" completer actually fires for "cd" and
+// not for an unrelated subcommand.
 //
 // It skips, rather than fails, when PowerShell is not available, since a
 // contributor's machine may not have it even though it is pinned in
@@ -99,6 +100,7 @@ func TestShellWrapper_ExecutesInPowerShell(t *testing.T) {
 		{"FAIL_EXIT", "2"},
 		{"FAIL_OUT_EMPTY", "True"},
 		{"FAIL_CHANGED", "False"},
+		{"FAIL_EXTRA_ERRORS", "0"},
 		{"PASS_OUT", "dev"},
 		{"CD_COMPLETIONS", "widget"},
 		{"STATUS_COMPLETION_COUNT", "0"},
@@ -135,11 +137,22 @@ gitcd clone $cloneUrl 2>$null | Out-Null
 Set-Location -LiteralPath $initial
 
 # "clone" with no argument is gitcd's own, deterministic, no network
-# failure: must propagate the exit code and print nothing.
+# failure: must propagate the exit code, print nothing, and raise no
+# PowerShell error of its own. gitcd's own stderr (its usage message)
+# legitimately reaches the console on every clone failure with or
+# without the guard, so a blunt "was anything written to stderr" check
+# cannot tell the two apart; $Error, which only grows when a cmdlet such
+# as Test-Path raises a non terminating error, can. "2>$null" below
+# only discards gitcd's own expected stderr text for this script's own
+# output, not $Error: a cmdlet error still lands there even when the
+# call that triggered it is redirected, confirmed by running this exact
+# scenario with Test-Path called on a null path.
+$Error.Clear()
 $failOut = gitcd clone 2>$null
 "FAIL_EXIT=$LASTEXITCODE"
 "FAIL_OUT_EMPTY=$([string]::IsNullOrEmpty($failOut))"
 "FAIL_CHANGED=$((Get-Location).Path -ne $initial)"
+"FAIL_EXTRA_ERRORS=$($Error.Count)"
 
 # A pass through command: its output must still reach the caller.
 $passOut = gitcd version
