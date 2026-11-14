@@ -609,6 +609,138 @@ func TestLoad_ProfileName(t *testing.T) {
 	})
 }
 
+func TestLoad_HostAliases(t *testing.T) {
+	tests := []struct {
+		name  string
+		alias string
+	}{
+		{name: "an alias that is only a wildcard", alias: "*"},
+		{name: "an alias holding a wildcard", alias: "github-*"},
+		{name: "an alias holding a crossing wildcard", alias: "**"},
+		{name: "an alias holding a quote", alias: `github.com" ]`},
+		{name: "an alias holding a line break", alias: "github.com\n[x]"},
+		{name: "an alias holding a path separator", alias: "github.com/acme"},
+		{name: "an empty alias", alias: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+" is rejected", func(t *testing.T) {
+			home := withHome(t)
+			writeFile(t, filepath.Join(home, ".gitcd.yaml"),
+				"hosts:\n  github.com:\n    aliases: ["+strconv.Quote(tt.alias)+"]\n")
+
+			_, err := config.Load()
+			if !errors.Is(err, config.ErrInvalidProfile) {
+				t.Fatalf("Load() error = %v, want it to wrap config.ErrInvalidProfile", err)
+			}
+		})
+	}
+
+	t.Run("an ordinary SSH host alias is accepted", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"),
+			"hosts:\n  github.com:\n    aliases: [github-work, github-private]\n")
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+		if got.AliasMap()["github-work"] != "github.com" {
+			t.Fatalf("AliasMap() = %v, want github-work to resolve to github.com", got.AliasMap())
+		}
+	})
+}
+
+func TestLoad_LayoutTemplate(t *testing.T) {
+	tests := []struct {
+		name   string
+		layout string
+	}{
+		{name: "a layout climbing out of the root", layout: "../../{host}/{owner}/{repo}"},
+		{name: "a layout holding a crossing wildcard", layout: "{host}/**/{repo}"},
+		{name: "a layout holding a wildcard", layout: "{host}/*/{repo}"},
+		{name: "a layout holding a quote", layout: `{host}" ]/{owner}/{repo}`},
+		{name: "a layout holding a line break", layout: "{host}\n[x]/{owner}/{repo}"},
+		{name: "a layout holding an empty segment", layout: "{host}//{repo}"},
+		{name: "a layout naming an unknown placeholder", layout: "{host}/{branch}/{repo}"},
+		{name: "an absolute layout", layout: "/{host}/{owner}/{repo}"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+" is rejected as the default", func(t *testing.T) {
+			home := withHome(t)
+			writeFile(t, filepath.Join(home, ".gitcd.yaml"),
+				"layout:\n  default: "+strconv.Quote(tt.layout)+"\n")
+
+			_, err := config.Load()
+			if !errors.Is(err, config.ErrInvalidProfile) {
+				t.Fatalf("Load() error = %v, want it to wrap config.ErrInvalidProfile", err)
+			}
+		})
+
+		t.Run(tt.name+" is rejected for a host", func(t *testing.T) {
+			home := withHome(t)
+			writeFile(t, filepath.Join(home, ".gitcd.yaml"),
+				"hosts:\n  github.com:\n    layout: "+strconv.Quote(tt.layout)+"\n")
+
+			_, err := config.Load()
+			if !errors.Is(err, config.ErrInvalidProfile) {
+				t.Fatalf("Load() error = %v, want it to wrap config.ErrInvalidProfile", err)
+			}
+		})
+	}
+
+	t.Run("the layouts gitcd ships and a literal segment are accepted", func(t *testing.T) {
+		for _, layout := range []string{
+			"{host}/{owner}/{repo}",
+			"{host}/{org}/{project}/{repo}",
+			"src/{host}/{owner}/{repo}",
+			"{host}/{owner}/{repo}.git",
+			"",
+		} {
+			home := withHome(t)
+			writeFile(t, filepath.Join(home, ".gitcd.yaml"),
+				"layout:\n  default: "+strconv.Quote(layout)+"\n")
+
+			if _, err := config.Load(); err != nil {
+				t.Fatalf("Load() returned an unexpected error for the layout %q: %v", layout, err)
+			}
+		}
+	})
+}
+
+func TestLoad_ProfileNamesCollidingByCase(t *testing.T) {
+	t.Run("two names differing only in case are rejected", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"),
+			"profiles:\n  work:\n    user.email: work@example.test\n"+
+				"  Work:\n    user.email: other@example.test\n")
+
+		_, err := config.Load()
+		if !errors.Is(err, config.ErrInvalidProfile) {
+			t.Fatalf("Load() error = %v, want it to wrap config.ErrInvalidProfile", err)
+		}
+		if !strings.Contains(err.Error(), "work") || !strings.Contains(err.Error(), "Work") {
+			t.Fatalf("Load() error = %v, want it to name both spellings", err)
+		}
+	})
+
+	t.Run("names differing by more than case are accepted", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"),
+			"profiles:\n  work:\n    user.email: work@example.test\n"+
+				"  work2:\n    user.email: other@example.test\n")
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+		if len(got.Profiles) != 2 {
+			t.Fatalf("Load().Profiles = %v, want both profiles kept", got.Profiles)
+		}
+	})
+}
+
 func TestLoad_ProfileValue(t *testing.T) {
 	t.Run("a value spanning two lines is kept", func(t *testing.T) {
 		home := withHome(t)
@@ -713,6 +845,74 @@ func TestLoad_UnsafeProfileKeys(t *testing.T) {
 			}
 		})
 	}
+
+	// One representative per family, rather than every key in the class:
+	// the families are what the gate is built from, so a family with no
+	// case here is a family nothing covers.
+	families := []struct {
+		name string
+		key  string
+	}{
+		{name: "a name ending in the command suffix", key: "gpg.ssh.defaultKeyCommand"},
+		{name: "a name ending in the command suffix under a subsection", key: "diff.jpeg.command"},
+		{name: "a name ending in the hook suffix", key: "uploadpack.packObjectsHook"},
+		{name: "a name ending in the editor suffix", key: "sequence.editor"},
+		{name: "a name ending in the program suffix", key: "gpg.program"},
+		{name: "a name ending in the askpass suffix", key: "core.askPass"},
+		{name: "a name ending in the path suffix", key: "core.hooksPath"},
+		{name: "a name ending in the clean suffix", key: "filter.lfs.clean"},
+		{name: "a name ending in the smudge suffix", key: "filter.lfs.smudge"},
+		{name: "a name ending in the driver suffix", key: "merge.theirs.driver"},
+		{name: "a name ending in the textconv suffix", key: "diff.jpeg.textconv"},
+		{name: "a name ending in the external suffix", key: "diff.external"},
+		{name: "a name ending in the variant suffix", key: "ssh.variant"},
+		{name: "a name ending in the proxy suffix", key: "http.proxy"},
+		{name: "a name ending in the templatedir suffix", key: "init.templateDir"},
+		{name: "a name ending in the cmd suffix", key: "difftool.vimdiff.cmd"},
+		{name: "a trust decision name", key: "safe.directory"},
+		{name: "a transport decision name", key: "protocol.ext.allow"},
+		{name: "an output destination name", key: "trace2.destination"},
+		{name: "a key in the alias section", key: "alias.co"},
+		{name: "a key in the pager section", key: "pager.log"},
+		{name: "a key in the credential section", key: "credential.helper"},
+		{name: "a key in the url section", key: "url.gh.insteadOf"},
+		{name: "a core key outside the working tree settings", key: "core.alternateRefsCommand"},
+	}
+
+	for _, tt := range families {
+		t.Run(tt.name+" is refused", func(t *testing.T) {
+			home := withHome(t)
+			writeFile(t, filepath.Join(home, ".gitcd.yaml"), profileFile(map[string]string{tt.key: "anything"}))
+
+			_, err := config.Load()
+			if !errors.Is(err, config.ErrUnsafeKey) {
+				t.Fatalf("Load() error = %v, want it to wrap config.ErrUnsafeKey", err)
+			}
+			if !strings.Contains(err.Error(), tt.key) {
+				t.Fatalf("Load() error = %v, want it to name the key %q it refused", err, tt.key)
+			}
+		})
+	}
+
+	t.Run("the signing keys a profile exists to set need no opt in", func(t *testing.T) {
+		home := withHome(t)
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), profileFile(map[string]string{
+			"user.email":                 "simon@example.test",
+			"user.signingkey":            "ssh-ed25519 AAAAEXAMPLE",
+			"gpg.format":                 "ssh",
+			"gpg.ssh.allowedSignersFile": "/home/simon/.signers",
+			"commit.gpgsign":             "true",
+			"tag.gpgsign":                "true",
+		}))
+
+		got, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() returned an unexpected error: %v", err)
+		}
+		if got.Profiles["private"]["gpg.format"] != "ssh" {
+			t.Fatalf("private profile = %v, want it to carry gpg.format", got.Profiles["private"])
+		}
+	})
 
 	t.Run("an ordinary identity key needs no opt in", func(t *testing.T) {
 		home := withHome(t)
