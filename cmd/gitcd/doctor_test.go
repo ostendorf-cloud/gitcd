@@ -72,6 +72,40 @@ func TestRunDoctor_NoRepositoriesAndNoManagedFilesNeededIsStillNonZeroOnAGlobalI
 	}
 }
 
+func TestRunDoctor_GlobalIdentityFindingNamesTheConfiguredDefaultProfile(t *testing.T) {
+	home := setupEnv(t)
+	// setupEnv's own baseline already sets a global user.name and
+	// user.email directly, exactly the KindGlobalIdentityKey finding
+	// this test inspects the wording of.
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+profiles:
+  work:
+    user.email: acme-work-identity
+defaultProfile: work
+rules:
+  - host: github.com
+    profile: work
+`)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"doctor"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("doctor = %d, want 1, stderr: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, `"work"`) {
+		t.Fatalf(
+			"doctor stdout = %q, want the global identity finding to name the configured default profile %q", out, "work",
+		)
+	}
+	if strings.Contains(out, `"global"`) {
+		t.Fatalf(
+			"doctor stdout = %q, want it to stop naming the hardcoded %q profile once a default profile is configured",
+			out, "global",
+		)
+	}
+}
+
 func TestRunDoctor_FixRerendersAMissingManagedFile(t *testing.T) {
 	home := setupEnv(t)
 	writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
@@ -352,6 +386,116 @@ func TestRunDoctor_FixRefusesAContestedAncestorAndConverges(t *testing.T) {
 			"doctor --fix (run 2) is not a no-op: directory entries under github.com changed, run 1 %v, run 2 %v",
 			afterRun1, afterRun2,
 		)
+	}
+}
+
+func TestRunDoctor_FixReportsAndFixesAnUnrelatedLeafMismatchUnderAContestedAncestor(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	// Three repositories share one ancestor directory, "Acme". "widget"
+	// and "other" genuinely contest its spelling, exactly the fixture
+	// TestRunDoctor_FixRefusesAContestedAncestorAndConverges already
+	// uses. "Mismatched" agrees with "Acme" and carries its own,
+	// unrelated leaf mismatch: the directory reads "Mismatched", its own
+	// remote implies the lowercase "mismatched", a mismatch one segment
+	// below the contested ancestor, not the ancestor itself.
+	widget := filepath.Join(root, "github.com", "Acme", "widget")
+	initRepository(t, widget)
+	runGit(t, widget, "remote", "add", "origin", "https://github.com/acme/widget.git")
+	other := filepath.Join(root, "github.com", "Acme", "other")
+	initRepository(t, other)
+	runGit(t, other, "remote", "add", "origin", "https://github.com/Acme/other.git")
+	mismatched := filepath.Join(root, "github.com", "Acme", "Mismatched")
+	initRepository(t, mismatched)
+	runGit(t, mismatched, "remote", "add", "origin", "https://github.com/Acme/mismatched.git")
+	wantMismatchedPath := filepath.Join(root, "github.com", "Acme", "mismatched")
+
+	var stdoutBefore, stderrBefore bytes.Buffer
+	code := run([]string{"doctor"}, &stdoutBefore, &stderrBefore)
+	if code != 1 {
+		t.Fatalf("doctor = %d, want 1, stderr: %s", code, stderrBefore.String())
+	}
+	before := stdoutBefore.String()
+	if !strings.Contains(before, "ancestor-case-conflict") {
+		t.Fatalf("doctor stdout = %q, want the ancestor conflict reported", before)
+	}
+	if !strings.Contains(before, "path-case-mismatch") || !strings.Contains(before, mismatched) {
+		t.Fatalf("doctor stdout = %q, want the leaf mismatch of %s reported too, not swallowed by the ancestor conflict", before, mismatched)
+	}
+
+	var stdoutFix1, stderrFix1 bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdoutFix1, &stderrFix1)
+	fix1 := stdoutFix1.String()
+	if !strings.Contains(fix1, "ancestor-case-conflict") {
+		t.Fatalf("doctor --fix stdout = %q, want the ancestor conflict still reported as outstanding", fix1)
+	}
+	contestedAncestor := filepath.Join(root, "github.com", "Acme")
+	if strings.Contains(fix1, "renamed "+contestedAncestor+" to") {
+		t.Fatalf("doctor --fix stdout = %q, want the contested ancestor %s never renamed", fix1, contestedAncestor)
+	}
+	wantFixLine := fmt.Sprintf("renamed %s to %s", mismatched, wantMismatchedPath)
+	if !strings.Contains(fix1, wantFixLine) {
+		t.Fatalf("doctor --fix stdout = %q, want it to fix the leaf mismatch: %q", fix1, wantFixLine)
+	}
+	if _, err := os.Stat(wantMismatchedPath); err != nil {
+		t.Fatalf("doctor --fix did not rename %s to %s: %v", mismatched, wantMismatchedPath, err)
+	}
+	if _, err := os.Stat(widget); err != nil {
+		t.Fatalf("doctor --fix moved the contested repository %s: %v", widget, err)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatalf("doctor --fix moved the contested repository %s: %v", other, err)
+	}
+
+	// Convergence: a second "--fix" run changes nothing further. The
+	// leaf is already fixed, and the ancestor conflict is reported again,
+	// identically, rather than flipping anything.
+	var stdoutFix2, stderrFix2 bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdoutFix2, &stderrFix2)
+	fix2 := stdoutFix2.String()
+	if strings.Contains(fix2, "renamed") {
+		t.Fatalf("doctor --fix (run 2) stdout = %q, want no further rename: the tree already converged", fix2)
+	}
+	if !strings.Contains(fix2, "ancestor-case-conflict") {
+		t.Fatalf("doctor --fix (run 2) stdout = %q, want the ancestor conflict reported again", fix2)
+	}
+}
+
+func TestRunDoctor_FixesTheSameLeafMismatchWithNoAncestorConflict(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	// The same leaf-only mismatch as above, with the contesting "widget"
+	// and "other" repositories removed: no ancestor conflict exists at
+	// all, so filterContestedPathCase has nothing to suppress. The leaf
+	// mismatch is reported and fixed exactly as it is above, confirming
+	// the ancestor conflict, not something else, was what suppressed it.
+	mismatched := filepath.Join(root, "github.com", "Acme", "Mismatched")
+	initRepository(t, mismatched)
+	runGit(t, mismatched, "remote", "add", "origin", "https://github.com/Acme/mismatched.git")
+	wantMismatchedPath := filepath.Join(root, "github.com", "Acme", "mismatched")
+
+	var stdout, stderr bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdout, &stderr)
+	out := stdout.String()
+	if strings.Contains(out, "ancestor-case-conflict") {
+		t.Fatalf("doctor --fix stdout = %q, want no ancestor conflict in this fixture", out)
+	}
+	wantFixLine := fmt.Sprintf("renamed %s to %s", mismatched, wantMismatchedPath)
+	if !strings.Contains(out, wantFixLine) {
+		t.Fatalf("doctor --fix stdout = %q, want it to fix the leaf mismatch: %q", out, wantFixLine)
+	}
+	if _, err := os.Stat(wantMismatchedPath); err != nil {
+		t.Fatalf("doctor --fix did not rename %s to %s: %v", mismatched, wantMismatchedPath, err)
+	}
+
+	var stdout2, stderr2 bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdout2, &stderr2)
+	if strings.Contains(stdout2.String(), "renamed") {
+		t.Fatalf("doctor --fix (run 2) stdout = %q, want no further rename: the tree already converged", stdout2.String())
 	}
 }
 

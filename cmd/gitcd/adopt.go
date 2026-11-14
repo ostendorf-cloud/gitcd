@@ -76,6 +76,10 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if !git.IsRepository(oldPath) {
+		if git.IsBareRepository(ctx, oldPath) {
+			fmt.Fprintf(stderr, "gitcd adopt: %s is a bare repository; adopt does not support one\n", oldPath)
+			return 1
+		}
 		fmt.Fprintf(stderr, "gitcd adopt: %s is not a git repository\n", oldPath)
 		return 1
 	}
@@ -165,18 +169,23 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	mkdirTarget := filepath.Dir(newPath)
 	createdFrom := firstMissingAncestor(mkdirTarget)
 	if err := os.MkdirAll(mkdirTarget, 0o755); err != nil {
+		if removeErr := removeCreatedAncestor(createdFrom); removeErr != nil {
+			fmt.Fprintf(
+				stderr, "gitcd adopt: create %s: %v (also failed to remove %s, created for the move: %v)\n",
+				mkdirTarget, err, createdFrom, removeErr,
+			)
+			return 1
+		}
 		fmt.Fprintf(stderr, "gitcd adopt: create %s: %v\n", mkdirTarget, err)
 		return 1
 	}
 	if err := os.Rename(oldPath, newPath); err != nil {
-		if createdFrom != "" {
-			if removeErr := os.RemoveAll(createdFrom); removeErr != nil {
-				fmt.Fprintf(
-					stderr, "gitcd adopt: move %s to %s: %v (also failed to remove %s, created for the move: %v)\n",
-					oldPath, newPath, err, createdFrom, removeErr,
-				)
-				return 1
-			}
+		if removeErr := removeCreatedAncestor(createdFrom); removeErr != nil {
+			fmt.Fprintf(
+				stderr, "gitcd adopt: move %s to %s: %v (also failed to remove %s, created for the move: %v)\n",
+				oldPath, newPath, err, createdFrom, removeErr,
+			)
+			return 1
 		}
 		fmt.Fprintf(stderr, "gitcd adopt: move %s to %s: %v\n", oldPath, newPath, err)
 		return 1
@@ -270,6 +279,20 @@ func firstMissingAncestor(dir string) string {
 		}
 		missing = parent
 	}
+}
+
+// removeCreatedAncestor removes createdFrom, the directory
+// firstMissingAncestor found before the "os.MkdirAll" that followed,
+// undoing exactly what that call created. It is a no-op, successfully,
+// when createdFrom is "": mkdirTarget already existed, so "os.MkdirAll"
+// created nothing to undo. Calling it after either "os.MkdirAll" itself
+// or the "os.Rename" that follows it fails leaves no directory behind
+// either way, instead of only the latter.
+func removeCreatedAncestor(createdFrom string) error {
+	if createdFrom == "" {
+		return nil
+	}
+	return os.RemoveAll(createdFrom)
 }
 
 // adoptTargetConflict reports why newPath must refuse to receive oldPath's

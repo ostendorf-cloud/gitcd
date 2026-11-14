@@ -188,14 +188,31 @@ func collectFindings(ctx context.Context, cfg config.Config, home string, logger
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read %s: %w", globalPath, err)
 	}
-	_, movedProfileExists := cfg.Profiles[defaultMovedProfileName]
-	globalFindings, err := doctor.CheckGlobal(globalContent, globalPath, defaultMovedProfileName, movedProfileExists)
+	movedProfileTarget := movedProfileTargetName(cfg)
+	_, movedProfileExists := cfg.Profiles[movedProfileTarget]
+	globalFindings, err := doctor.CheckGlobal(globalContent, globalPath, movedProfileTarget, movedProfileExists)
 	if err != nil {
 		return nil, err
 	}
 	findings = append(findings, globalFindings...)
 
 	return findings, nil
+}
+
+// movedProfileTargetName names the profile a global identity key finding
+// points at as where that key belongs: cfg.DefaultProfile, the profile
+// the configuration's own rules already apply to a remote no rule
+// matches, exactly the scope a key set directly in the global git
+// configuration also has, when one is configured; defaultMovedProfileName,
+// "gitcd init --move-identity"'s own default, otherwise. Naming
+// defaultMovedProfileName unconditionally would claim a user who moved
+// their identity with "gitcd init --move-identity --profile work" still
+// has it sitting in a profile called "global".
+func movedProfileTargetName(cfg config.Config) string {
+	if cfg.DefaultProfile != "" {
+		return cfg.DefaultProfile
+	}
+	return defaultMovedProfileName
 }
 
 // applyFixes repairs every mechanical finding in all, splitting the
@@ -326,27 +343,43 @@ func wantPath(ctx context.Context, cfg config.Config, path string) (string, erro
 	return filepath.Join(cfg.Root, rel), nil
 }
 
-// filterContestedPathCase drops every KindPathCase finding in findings
-// whose own path sits under one of contested, the ancestor directories
-// CheckAncestorCaseConflicts found two or more repositories disagreeing
-// about: a KindAncestorCaseConflict finding replaces it instead, so
-// "doctor --fix" never attempts the rename a KindPathCase finding would
-// otherwise have it try.
+// filterContestedPathCase drops a KindPathCase finding only when
+// repairing it would actually rename one of contested, the ancestor
+// directories CheckAncestorCaseConflicts found two or more repositories
+// disagreeing about: a KindAncestorCaseConflict finding replaces it
+// instead, so "doctor --fix" never attempts the rename a KindPathCase
+// finding would otherwise have it try.
+//
+// A finding's own repair, renameCaseOnly, renames
+// doctor.FirstDifferingSegment(f.Path, f.WantPath), the topmost segment
+// at which the two actually differ, not necessarily f.Path itself: a
+// repository that merely sits somewhere under a contested ancestor, but
+// whose own mismatch is a deeper, unrelated segment, is repaired by
+// renaming only that deeper segment, never the contested one, so it must
+// stay reported and fixable. Only a finding whose own differing segment
+// equals, or is itself an ancestor of, one of contested is suppressed,
+// since only then does the repair reach far enough up the tree to carry
+// the contested ancestor along.
 func filterContestedPathCase(findings []doctor.Finding, contested []string) []doctor.Finding {
 	kept := make([]doctor.Finding, 0, len(findings))
 	for _, f := range findings {
-		if f.Kind == doctor.KindPathCase && underAny(f.Path, contested) {
-			continue
+		if f.Kind == doctor.KindPathCase {
+			ownAncestor, _ := doctor.FirstDifferingSegment(f.Path, f.WantPath)
+			if coversAny(ownAncestor, contested) {
+				continue
+			}
 		}
 		kept = append(kept, f)
 	}
 	return kept
 }
 
-// underAny reports whether path equals, or sits under, any of ancestors.
-func underAny(path string, ancestors []string) bool {
-	for _, a := range ancestors {
-		if path == a || strings.HasPrefix(path, a+string(filepath.Separator)) {
+// coversAny reports whether ancestor equals, or is itself an ancestor
+// of, any of paths: whether a rename of ancestor would carry one of
+// paths along with it.
+func coversAny(ancestor string, paths []string) bool {
+	for _, p := range paths {
+		if ancestor == p || strings.HasPrefix(p, ancestor+string(filepath.Separator)) {
 			return true
 		}
 	}
