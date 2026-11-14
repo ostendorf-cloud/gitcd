@@ -9,9 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"text/tabwriter"
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
+	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
 	"github.com/ostendorf-cloud/gitcd/internal/status"
 )
 
@@ -64,42 +66,55 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gitcd status: %v\n", err)
 		return 1
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "gitcd status: %v\n", err)
+		return 1
+	}
 
-	paths, err := discoverRepos(cfg.Root)
+	// A linked worktree carries its own branch and its own dirty state,
+	// distinct from its main checkout's, so it always gets its own row:
+	// see scanRepositories's own doc comment for the rule this follows
+	// for every other command. Unlike "list", "cd" and "doctor", status
+	// needs nothing profile.Inspect resolves, only a repository's own
+	// path, so a repository scanRepositories could not fully inspect is
+	// still given a row rather than dropped.
+	results, err := scanRepositories(ctx, cfg, gitconfig.Dir(home), true)
 	if err != nil {
 		fmt.Fprintf(stderr, "gitcd status: search %s: %v\n", cfg.Root, err)
 		return 1
 	}
-	logger.Debug("discovered repositories", "root", cfg.Root, "count", len(paths))
+	logger.Debug("discovered repositories", "root", cfg.Root, "count", len(results))
 
-	var results []repoStatus
+	var rows []repoStatus
 	failed := false
-	for _, path := range paths {
+	for _, res := range results {
+		path := res.Repo.Path
 		name := repoName(cfg.Root, path)
 		st, err := status.Inspect(ctx, path)
 		if err != nil {
 			fmt.Fprintf(stderr, "gitcd status: %s: %v\n", name, err)
-			results = append(results, repoStatus{Name: name, Path: path, Error: err.Error()})
+			rows = append(rows, repoStatus{Name: name, Path: path, Error: err.Error()})
 			failed = true
 			continue
 		}
-		results = append(results, toRepoStatus(name, st))
+		rows = append(rows, toRepoStatus(name, st))
 	}
 
 	if *jsonOutput {
-		if err := json.NewEncoder(stdout).Encode(results); err != nil {
+		if err := json.NewEncoder(stdout).Encode(rows); err != nil {
 			fmt.Fprintf(stderr, "gitcd status: encode output: %v\n", err)
 			return 1
 		}
 	} else {
-		writeStatusTable(stdout, results)
+		writeStatusTable(stdout, rows)
 	}
 
 	if failed {
 		return 1
 	}
 	if *strict {
-		for _, r := range results {
+		for _, r := range rows {
 			if r.Dirty {
 				return 1
 			}

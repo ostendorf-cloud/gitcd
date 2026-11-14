@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/git"
+	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
 	"github.com/ostendorf-cloud/gitcd/internal/layout"
 	"github.com/ostendorf-cloud/gitcd/internal/remote"
 )
@@ -48,8 +50,13 @@ func runOpen(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gitcd open: %v\n", err)
 		return 1
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "gitcd open: %v\n", err)
+		return 1
+	}
 
-	path, err := resolveOpenTarget(cfg, argOrDefault(fset, "."))
+	path, err := resolveOpenTarget(ctx, cfg, gitconfig.Dir(home), argOrDefault(fset, "."), logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "gitcd open: %v\n", err)
 		return 1
@@ -71,14 +78,14 @@ func argOrDefault(fset *flag.FlagSet, def string) string {
 // resolveOpenTarget resolves query to a repository path, exactly as
 // "gitcd path" would: a literal path or "." is used as given, a query
 // containing "/" is a "host/owner/repo" shorthand that must already be
-// cloned, and anything else is an exact repository name searched for
-// under cfg.Root.
-func resolveOpenTarget(cfg config.Config, query string) (string, error) {
+// cloned, and anything else is an exact repository name, a linked
+// worktree included, searched for under cfg.Root.
+func resolveOpenTarget(ctx context.Context, cfg config.Config, managedDir, query string, logger *slog.Logger) (string, error) {
 	if query == "." || query == "" {
 		return query, nil
 	}
 	if !strings.Contains(query, "/") {
-		matches, err := findByName(cfg.Root, query)
+		matches, err := findByName(ctx, cfg, managedDir, query, logger)
 		if err != nil {
 			return "", fmt.Errorf("search %s: %w", cfg.Root, err)
 		}

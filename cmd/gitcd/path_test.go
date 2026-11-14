@@ -28,6 +28,32 @@ func TestRunPath_ResolvesAnExactRepositoryName(t *testing.T) {
 	}
 }
 
+// TestRunPath_ResolvesALinkedWorktreeNestedInsideItsOwnRepository guards
+// the worktree visibility rule "path" settles on: a linked worktree, even
+// nested at "<repo>/.claude/worktrees/<branch>", is as valid a
+// destination as its main checkout, resolved by name exactly as "cd"
+// resolves one.
+func TestRunPath_ResolvesALinkedWorktreeNestedInsideItsOwnRepository(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+
+	main := filepath.Join(root, "github.com", "acme", "widget")
+	initRepository(t, main)
+	runGit(t, main, "remote", "add", "origin", "https://github.com/acme/widget.git")
+	worktree := filepath.Join(main, ".claude", "worktrees", "feat-x")
+	runGit(t, main, "worktree", "add", worktree, "-b", "feat-x")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"path", "feat-x"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("path feat-x = %d, want 0, stderr: %s", code, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != worktree {
+		t.Fatalf("path feat-x stdout = %q, want %q", got, worktree)
+	}
+}
+
 func TestRunPath_NoMatchFails(t *testing.T) {
 	setupEnv(t)
 

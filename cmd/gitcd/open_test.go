@@ -54,6 +54,35 @@ func TestRunOpen_PrintResolvesAHostOwnerRepoShorthandAlreadyCloned(t *testing.T)
 	}
 }
 
+// TestRunOpen_PrintResolvesALinkedWorktreeNestedInsideItsOwnRepository
+// guards the worktree visibility rule "open" settles on: a linked
+// worktree, even nested at "<repo>/.claude/worktrees/<branch>", is as
+// valid a destination as its main checkout, resolved by name exactly as
+// "cd" resolves one. Its own remote is shared with its main checkout's,
+// read from the common git configuration regardless of which checkout
+// "git" is asked from.
+func TestRunOpen_PrintResolvesALinkedWorktreeNestedInsideItsOwnRepository(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+
+	main := filepath.Join(root, "github.com", "acme", "widget")
+	initRepository(t, main)
+	runGit(t, main, "remote", "add", "origin", "https://github.com/acme/widget.git")
+	worktree := filepath.Join(main, ".claude", "worktrees", "feat-x")
+	runGit(t, main, "worktree", "add", worktree, "-b", "feat-x")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"open", "--print", "feat-x"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("open --print feat-x = %d, want 0, stderr: %s", code, stderr.String())
+	}
+	want := "https://github.com/acme/widget"
+	if got := strings.TrimSpace(stdout.String()); got != want {
+		t.Fatalf("open --print feat-x stdout = %q, want %q", got, want)
+	}
+}
+
 func TestRunOpen_PrintDefaultsToTheCurrentDirectory(t *testing.T) {
 	home := setupEnv(t)
 	root := filepath.Join(home, "Code")

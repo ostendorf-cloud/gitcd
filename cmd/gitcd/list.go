@@ -15,7 +15,6 @@ import (
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
-	"github.com/ostendorf-cloud/gitcd/internal/scan"
 )
 
 // listEntry is one repository "gitcd list" reports, the same shape for
@@ -80,26 +79,20 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// listEntries scans cfg.Root and reports one listEntry per repository scan.Walk
-// found, skipping a linked worktree unless withWorktrees is set and
-// skipping, with a warning on stderr through logger, a repository
-// scan.Walk could not inspect, most commonly one with no configured
-// remote.
+// listEntries scans cfg.Root and reports one listEntry per repository
+// scanRepositories found, hiding a linked worktree unless withWorktrees
+// is set: the one exception to every other command's rule, since a
+// worktree is not itself a distinct clone someone maintains in the fleet
+// listing. See scanRepositories's own doc comment.
 func listEntries(ctx context.Context, cfg config.Config, managedDir string, withWorktrees bool, logger *slog.Logger) ([]listEntry, error) {
-	results, err := scan.Walk(ctx, cfg.Root, cfg, managedDir)
+	results, err := scanRepositories(ctx, cfg, managedDir, withWorktrees)
 	if err != nil {
 		return nil, fmt.Errorf("list: %w", err)
 	}
+	results = keepInspectable(results, logger)
 
 	entries := make([]listEntry, 0, len(results))
 	for _, res := range results {
-		if res.Err != nil {
-			logger.Warn("skipped a repository scan could not inspect", "path", res.Repo.Path, "error", res.Err)
-			continue
-		}
-		if res.Repo.IsWorktree && !withWorktrees {
-			continue
-		}
 		entries = append(entries, listEntry{
 			Path:     res.Repo.Path,
 			Remote:   res.Repo.RemoteURL,

@@ -177,6 +177,41 @@ func TestRunStatus_StrictExitsNonZeroWhenAnyRepositoryIsDirty(t *testing.T) {
 	}
 }
 
+// TestRunStatus_IncludesALinkedWorktreeAsItsOwnRow guards the worktree
+// visibility rule status settles on: a linked worktree carries its own
+// branch and its own dirty state, distinct from its main checkout's, so
+// it always gets its own row, even nested at the
+// "<repo>/.claude/worktrees/<branch>" layout this organisation's own
+// worktree convention produces, the one shape "status" could not see
+// before this command moved onto internal/scan.
+func TestRunStatus_IncludesALinkedWorktreeAsItsOwnRow(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+
+	main := filepath.Join(root, "github.com", "acme", "widget")
+	initRepository(t, main)
+	runGit(t, main, "remote", "add", "origin", "https://github.com/acme/widget.git")
+	worktree := filepath.Join(main, ".claude", "worktrees", "feat-x")
+	runGit(t, main, "worktree", "add", worktree, "-b", "feat-x")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"status"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("status = %d, want 0, stderr: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "main") {
+		t.Fatalf("status output is missing the main checkout's own row: %s", out)
+	}
+	if !strings.Contains(out, "feat-x") {
+		t.Fatalf("status output is missing a row for the linked worktree's own branch %q: %s", "feat-x", out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("status output has %d lines, want 3 (the header, the main checkout and the worktree): %s", len(lines), out)
+	}
+}
+
 func TestRunStatus_NoRepositoriesIsNotAFailure(t *testing.T) {
 	setupEnv(t)
 

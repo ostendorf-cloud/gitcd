@@ -4,14 +4,17 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
+	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
 	"github.com/ostendorf-cloud/gitcd/internal/layout"
 	"github.com/ostendorf-cloud/gitcd/internal/remote"
 )
@@ -34,6 +37,7 @@ func runPath(args []string, stdout, stderr io.Writer) int {
 	}
 	query := fset.Arg(0)
 	logger := newLogger(*verbose, stderr)
+	ctx := context.Background()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -45,7 +49,13 @@ func runPath(args []string, stdout, stderr io.Writer) int {
 	if strings.Contains(query, "/") {
 		return pathFromShorthand(stdout, stderr, cfg, query)
 	}
-	return pathFromName(stdout, stderr, cfg, query)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "gitcd path: %v\n", err)
+		return 1
+	}
+	return pathFromName(ctx, stdout, stderr, cfg, gitconfig.Dir(home), query, logger)
 }
 
 // pathFromShorthand resolves a "host/owner/repo" query by rendering the
@@ -71,11 +81,13 @@ func pathFromShorthand(stdout, stderr io.Writer, cfg config.Config, query string
 }
 
 // pathFromName resolves a bare repository name by its exact match against
-// every repository directly under root, erroring when none or more than
-// one matches rather than guessing: fuzzy matching belongs to "cd", the
-// next milestone's command.
-func pathFromName(stdout, stderr io.Writer, cfg config.Config, name string) int {
-	matches, err := findByName(cfg.Root, name)
+// every repository under root, a linked worktree included, erroring when
+// none or more than one matches rather than guessing: fuzzy matching
+// belongs to "cd".
+func pathFromName(
+	ctx context.Context, stdout, stderr io.Writer, cfg config.Config, managedDir, name string, logger *slog.Logger,
+) int {
+	matches, err := findByName(ctx, cfg, managedDir, name, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "gitcd path: search %s: %v\n", cfg.Root, err)
 		return 1
@@ -95,21 +107,4 @@ func pathFromName(stdout, stderr io.Writer, cfg config.Config, name string) int 
 		}
 		return 1
 	}
-}
-
-// findByName reports every repository under root whose own directory
-// name is exactly name, built on discoverRepos's walk.
-func findByName(root, name string) ([]string, error) {
-	repos, err := discoverRepos(root)
-	if err != nil {
-		return nil, err
-	}
-
-	var matches []string
-	for _, path := range repos {
-		if filepath.Base(path) == name {
-			matches = append(matches, path)
-		}
-	}
-	return matches, nil
 }
