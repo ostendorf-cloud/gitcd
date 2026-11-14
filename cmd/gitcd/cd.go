@@ -12,13 +12,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
-	"github.com/ostendorf-cloud/gitcd/internal/scan"
 )
 
 // cdCandidate is one repository "gitcd cd" can jump to: its absolute path
@@ -84,20 +82,21 @@ func runCd(args []string, stdin io.Reader, isTerminal bool, stdout, stderr io.Wr
 }
 
 // cdCandidates scans cfg.Root into every cdCandidate "cd" may resolve a
-// query to, skipping, with a warning on stderr through logger, a
-// repository scan.Walk could not inspect.
+// query to: a linked worktree is always a candidate, exactly like any
+// other managed repository, since jumping to one is the whole point of
+// having it. See scanRepositories's own doc comment for the rule this
+// follows for every other command, and for why its result, which this
+// function builds candidates from in order without sorting it again, is
+// already sorted by name.
 func cdCandidates(ctx context.Context, cfg config.Config, managedDir string, logger *slog.Logger) ([]cdCandidate, error) {
-	results, err := scan.Walk(ctx, cfg.Root, cfg, managedDir)
+	results, err := scanRepositories(ctx, cfg, managedDir, true)
 	if err != nil {
 		return nil, fmt.Errorf("cd: %w", err)
 	}
+	results = keepInspectable(results, logger)
 
 	candidates := make([]cdCandidate, 0, len(results))
 	for _, res := range results {
-		if res.Err != nil {
-			logger.Warn("skipped a repository scan could not inspect", "path", res.Repo.Path, "error", res.Err)
-			continue
-		}
 		rel, err := filepath.Rel(cfg.Root, res.Repo.Path)
 		if err != nil {
 			rel = res.Repo.Path
@@ -109,7 +108,6 @@ func cdCandidates(ctx context.Context, cfg config.Config, managedDir string, log
 			name: filepath.Base(rel),
 		})
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].rel < candidates[j].rel })
 	return candidates, nil
 }
 

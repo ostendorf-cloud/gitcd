@@ -138,6 +138,39 @@ func TestRunSync_DryRunFetchesNothing(t *testing.T) {
 	}
 }
 
+// TestRunSync_ExcludesALinkedWorktreeSinceItSharesItsMainCheckoutsRemote
+// guards the worktree visibility rule sync settles on: every worktree of
+// one repository shares that repository's remote, so fetching one again
+// would only repeat the exact same fetch. "--dry-run" naming only the
+// main checkout, nested worktree and all, is the directly observable
+// proof.
+func TestRunSync_ExcludesALinkedWorktreeSinceItSharesItsMainCheckoutsRemote(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+
+	repo := filepath.Join(root, "host", "acme", "repo")
+	initRepository(t, repo)
+	runGit(t, repo, "remote", "add", "origin", "https://github.com/acme/repo.git")
+	worktree := filepath.Join(repo, ".claude", "worktrees", "feat-x")
+	runGit(t, repo, "worktree", "add", worktree, "-b", "feat-x")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"sync", "--dry-run"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("sync --dry-run = %d, want 0, stderr: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "host/acme/repo\n") {
+		t.Fatalf("sync --dry-run stdout = %q, want it to name the main checkout %q", out, "host/acme/repo")
+	}
+	if strings.Contains(out, filepath.ToSlash(filepath.Join("host", "acme", "repo", ".claude"))) {
+		t.Fatalf(
+			"sync --dry-run stdout = %q, want no entry naming the linked worktree: it must never be fetched on its own",
+			out,
+		)
+	}
+}
+
 func TestRunSync_NoRepositoriesIsNotAFailure(t *testing.T) {
 	setupEnv(t)
 
