@@ -9,3 +9,6 @@ markdownlint-cli2 = "0.20"
 yamllint = "1"
 gitleaks = "8"
 goreleaser = "2"
+# Used only to execute the "gitcd shell-init pwsh" snippet in its own
+# test; not needed to build gitcd itself.
+powershell = "7.7.0"

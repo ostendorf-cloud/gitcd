@@ -37,6 +37,10 @@ eval "$(gitcd shell-init zsh)"             # wrap the binary so clone and path c
 gitcd version
 ```
 
+```powershell
+Invoke-Expression (gitcd shell-init pwsh | Out-String) # the same, in PowerShell's $PROFILE
+```
+
 Every command prints its result on stdout and everything else, including every log line, on
 stderr; `--verbose` enables debug logging and `--dry-run` previews a command that writes
 without doing it. `clone` is idempotent: a target that already exists with the same remote
