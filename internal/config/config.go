@@ -68,6 +68,10 @@ var ruleHost = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
 // whole, on the same terms as ruleHost.
 var ruleSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// hostAlias matches a host alias: ruleHost widened by the underscore an
+// ssh_config "Host" name may carry.
+var hostAlias = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`)
+
 // profileName matches a profile name, which becomes one path segment:
 // the name of the file "apply" renders the profile to. It has to begin
 // and end with a letter or a digit, so the rendered file is neither

@@ -609,6 +609,45 @@ func TestLoad_ProfileName(t *testing.T) {
 	})
 }
 
+func TestLoad_Root(t *testing.T) {
+	tests := []struct {
+		name string
+		root string
+	}{
+		{name: "a root holding a wildcard", root: "/tmp/code/*"},
+		{name: "a root holding a single character wildcard", root: "/tmp/co?e"},
+		{name: "a root holding a character class", root: "/tmp/[cd]ode"},
+		{name: "a root holding a quote", root: `/tmp/code" ]`},
+		{name: "a root holding a line break", root: "/tmp/code\n[includeIf \"gitdir:/\"]"},
+		{name: "a root climbing through a parent segment", root: "/tmp/code/../../elsewhere"},
+		{name: "a relative root", root: "code"},
+		{name: "an empty root", root: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+" is rejected", func(t *testing.T) {
+			home := withHome(t)
+			writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+strconv.Quote(tt.root)+"\n")
+
+			_, err := config.Load()
+			if !errors.Is(err, config.ErrInvalidProfile) {
+				t.Fatalf("Load() error = %v, want it to wrap config.ErrInvalidProfile", err)
+			}
+		})
+	}
+
+	t.Run("an ordinary root, a space and a non-ASCII name included, is accepted", func(t *testing.T) {
+		for _, root := range []string{"~/Code", "/tmp/My Code", "/tmp/Código", "~"} {
+			home := withHome(t)
+			writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+strconv.Quote(root)+"\n")
+
+			if _, err := config.Load(); err != nil {
+				t.Fatalf("Load() returned an unexpected error for the root %q: %v", root, err)
+			}
+		}
+	})
+}
+
 func TestLoad_HostAliases(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -647,6 +686,24 @@ func TestLoad_HostAliases(t *testing.T) {
 		}
 		if got.AliasMap()["github-work"] != "github.com" {
 			t.Fatalf("AliasMap() = %v, want github-work to resolve to github.com", got.AliasMap())
+		}
+	})
+
+	// An alias is an ssh_config "Host" name, not a DNS name, so the
+	// underscore people use in one has to pass.
+	t.Run("an alias holding an underscore is accepted", func(t *testing.T) {
+		for _, alias := range []string{"github_work", "x_y.example.com", "work_2"} {
+			home := withHome(t)
+			writeFile(t, filepath.Join(home, ".gitcd.yaml"),
+				"hosts:\n  github.com:\n    aliases: ["+strconv.Quote(alias)+"]\n")
+
+			got, err := config.Load()
+			if err != nil {
+				t.Fatalf("Load() returned an unexpected error for the alias %q: %v", alias, err)
+			}
+			if got.AliasMap()[alias] != "github.com" {
+				t.Fatalf("AliasMap() = %v, want %q to resolve to github.com", got.AliasMap(), alias)
+			}
 		}
 	})
 }
@@ -876,7 +933,7 @@ func TestLoad_UnsafeProfileKeys(t *testing.T) {
 		{name: "a key in the pager section", key: "pager.log"},
 		{name: "a key in the credential section", key: "credential.helper"},
 		{name: "a key in the url section", key: "url.gh.insteadOf"},
-		{name: "a core key outside the working tree settings", key: "core.alternateRefsCommand"},
+		{name: "a core key naming a command", key: "core.alternateRefsCommand"},
 	}
 
 	for _, tt := range families {

@@ -6,9 +6,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // ErrUnsafeKey is wrapped into the error Load returns when a profile
@@ -59,7 +61,6 @@ const AllowUnsafeKeysKey = "allowUnsafeKeys"
 // covers the spellings git has not invented yet.
 var unsafeNameSuffixes = []string{
 	"askpass",
-	"clean",
 	"cmd",
 	"command",
 	"driver",
@@ -67,104 +68,233 @@ var unsafeNameSuffixes = []string{
 	"external",
 	"hook",
 	"hookspath",
+	"httpd",
 	"pager",
 	"process",
 	"program",
 	"proxy",
-	"smudge",
+	"smtpserver",
+	"target",
 	"templatedir",
 	"textconv",
+	"tunnel",
 	"variant",
 }
 
 // unsafeExactNames are final names that denote the same thing but are
 // not composed of a recognisable ending.
+//
+// "helper" is here rather than the whole "credential" section: it is the
+// only key in that section whose value git resolves to a program, and
+// the rest, "credential.username" and "credential.useHttpPath" among
+// them, are plain settings.
+//
+// The four protection names are a scope decision rather than a command.
+// None of them runs anything: "core.protectNTFS" and "core.protectHFS"
+// refuse to check out a path a crafted tree could use to write into
+// ".git" on those filesystems, "core.sharedRepository" sets the mode of
+// what git creates, and "core.symlinks" decides whether a symlink in a
+// tree becomes one on disk. A profile may not weaken any of them,
+// because a profile is applied automatically, per remote, to a
+// repository whose contents came from that remote: the setting that
+// decides what git will write to the filesystem should not be chosen by
+// the same mechanism that decides who the commit is from. Setting one is
+// still possible, by naming it, which is the point.
 var unsafeExactNames = []string{
 	"allow",
-	"destination",
+	"barerepository",
 	"directory",
 	"fsmonitor",
+	"helper",
 	"insteadof",
+	"protecthfs",
+	"protectntfs",
 	"pushinsteadof",
+	"sharedrepository",
+	"symlinks",
 }
 
-// unsafeSections are sections in which no key is an identity setting,
-// so the whole section is restricted. "pager" and "alias" hold nothing
-// but command definitions, keyed by a subsection the user invents;
-// "credential" decides where a credential comes from; "url" holds only
-// the two rewriting keys; "safe", "protocol" and "trace2" decide what
-// git trusts, which transports it will use, and where it writes its own
-// trace output.
+// unsafeSections are sections in which every key git documents defines a
+// command or rewrites the URL git contacts. "alias" and "pager" hold
+// nothing but command definitions, keyed by a subsection the user
+// invents, and "url" holds only the two rewriting keys.
+//
+// A section is not used where only some of its keys qualify.
+// "credential", "difftool", "mergetool", "protocol", "safe" and "trace2"
+// each hold one or two keys git resolves to a program, a path or a trust
+// decision, beside plain preferences like "credential.useHttpPath",
+// "mergetool.prompt", "protocol.version" and "trace2.eventBrief". The
+// keys that qualify are reached by name instead: "helper", "cmd",
+// "path", "allow", "directory", "bareRepository" and the "target"
+// ending.
 var unsafeSections = []string{
 	"alias",
-	"credential",
-	"difftool",
-	"mergetool",
 	"pager",
-	"protocol",
-	"safe",
-	"trace2",
 	"url",
 }
 
-// invertedSections are sections restricted as a whole except for the
-// keys safeCoreNames lists. "core" is one: its keys run from
-// "core.autocrlf", which any profile may set, to "core.sshCommand" and
-// "core.hooksPath", which no profile may set unannounced, and the two
-// groups are not told apart by their spelling. Listing what an ordinary
-// profile legitimately sets, and restricting the rest, is the only way
-// round that puts a key git adds later on the restricted side by
-// default.
-var invertedSections = []string{"core"}
-
-// safeCoreNames are the "core" keys an ordinary profile may carry: the
-// settings that describe how a working tree is stored and compared, none
-// of which names a command, a path git resolves, or a credential.
-var safeCoreNames = []string{
-	"abbrev",
-	"autocrlf",
-	"bare",
-	"bigfilethreshold",
-	"commentchar",
-	"compression",
-	"eol",
-	"excludesfile",
-	"filemode",
-	"ignorecase",
-	"logallrefupdates",
-	"loosecompression",
-	"precomposeunicode",
-	"quotepath",
-	"safecrlf",
-	"sharedrepository",
-	"symlinks",
-	"trustctime",
-	"untrackedcache",
-	"whitespace",
+// unsafeSectionNames are final names restricted only under one section,
+// because the same name is an ordinary setting elsewhere. A filter's
+// "clean" and "smudge" are the two halves of a content filter git runs;
+// "column.clean" is which columns "git clean -i" prints. A tool's "path"
+// is the program git runs for it; "core.quotePath" and
+// "credential.useHttpPath" are booleans that merely end the same way.
+//
+// "process" under "filter" decides nothing today: git does not enumerate
+// "filter.<driver>.process", so the unfamiliar key rule reaches it
+// first. It stays because that is a property of the generated list
+// rather than of the key, and the day the list carries it, this is the
+// rule that has to be there.
+var unsafeSectionNames = map[string][]string{
+	"difftool":  {"path"},
+	"filter":    {"clean", "process", "smudge"},
+	"mergetool": {"path"},
 }
 
-// UnsafeKeyReason reports whether key belongs to a family a profile may
-// carry only when AllowUnsafeKeysKey names it, and returns the plain
-// reason the family is listed. key need not be valid: an unparseable key
-// is simply not unsafe, since ValidateProfileKey refuses it first.
-func UnsafeKeyReason(key string) (string, bool) {
+// inertSections are the sections in which git resolves no key's value to
+// a program or a path, so a family match on a key in one of them is a
+// collision of spelling rather than a description of what the key does.
+//
+// This is the whole of the set aside, and it is a statement about the
+// section rather than about the value. An earlier version asked instead
+// whether the value was a git boolean, on the reasoning that a boolean
+// cannot be a command. That reasoning is wrong: "true", "false" and
+// "yes" are programs on PATH, so "core.sshCommand = false" runs
+// /usr/bin/false and "core.sshCommand = yes" hangs, and an empty value
+// is a boolean too. A key whose value git resolves to a program is
+// therefore restricted whatever the value looks like, and the set aside
+// only reaches the sections where no key is resolved at all.
+//
+// Each section here was checked against the generated key list rather
+// than recalled: the only names in them that any family rule matches are
+// "advice.ignoredHook", "advice.updateSparsePath",
+// "advice.waitingForEditor" and "color.pager", every one a switch that
+// names nothing.
+var inertSections = []string{"advice", "color", "column"}
+
+// extraKnownGitKeys are keys git documents in git-config(1) but does not
+// print from "git help -c", so the generated list cannot carry them and
+// the unfamiliar key rule would refuse a setting git itself describes.
+//
+// Each entry is one key, and the comment beside it says where git
+// documents it, so the list can be checked rather than believed. It
+// stays honest two ways: it is only ever a key git documents, never a
+// convenience, and TestExtraKnownGitKeys asserts every entry is still
+// absent from the generated list, so an entry git starts enumerating
+// fails the build instead of sitting here as a quiet duplicate.
+//
+// Nothing restricted belongs here. An entry only ever moves a key from
+// "git does not document this" to the family rules, which then decide
+// it on its merits, so adding one can never make a key that names a
+// command allowed.
+var extraKnownGitKeys = []string{
+	// git-config(1), "core.longPaths": a Windows only setting for paths
+	// past MAX_PATH. A boolean, resolved to nothing.
+	"core.longpaths",
+}
+
+// knownKeys is the set knownGitKeyPairs spells, plus extraKnownGitKeys,
+// built once.
+var knownKeys = sync.OnceValue(func() map[string]bool {
+	fields := strings.Fields(knownGitKeyPairs)
+	keys := make(map[string]bool, len(fields)+len(extraKnownGitKeys))
+	for _, pair := range fields {
+		keys[pair] = true
+	}
+	for _, pair := range extraKnownGitKeys {
+		keys[pair] = true
+	}
+	return keys
+})
+
+// generatedGitKeys is the generated list alone, without the addendum,
+// for the test that keeps the addendum from going stale.
+var generatedGitKeys = sync.OnceValue(func() map[string]bool {
+	fields := strings.Fields(knownGitKeyPairs)
+	keys := make(map[string]bool, len(fields))
+	for _, pair := range fields {
+		keys[pair] = true
+	}
+	return keys
+})
+
+// UnsafeKeyReason reports whether key, carrying value, is one a profile
+// may hold only when AllowUnsafeKeysKey names it, and returns the plain
+// reason. key need not be valid: an unparseable key is simply not
+// reported here, since ValidateProfileKey refuses it first.
+//
+// There are two independent reasons a key is restricted, and the second
+// is what keeps the first from having to be exhaustive.
+//
+// The first is the family rules above, which describe what a key does.
+// They are matched on the section and the final name, never the
+// subsection, and a match is set aside when the value is inert, since a
+// boolean names no command.
+//
+// The second is that the key is not one the git gitcd was generated
+// against documents at all. That is the rule that holds the property the
+// family rules cannot: a setting git adds after this list was generated
+// is restricted by default, whatever it is called and whatever it does,
+// so a future key that hands git a command does not become allowed by
+// the family rules having failed to predict its name. It is also why the
+// family rules can be narrowed to what they really cover, instead of
+// being widened until they catch everything, without opening a gap: a
+// name the rules no longer match still has to be a key git documents.
+//
+// The cost is a key git documents in a version newer than the generated
+// list, which is refused until the list is regenerated. That is a
+// refusal with a remedy printed next to it, and the remedy is the same
+// opt in, so the trade runs the safe way round.
+func UnsafeKeyReason(key, value string) (string, bool) {
 	section, _, name, err := SplitKey(key)
 	if err != nil {
 		return "", false
 	}
 	section, name = strings.ToLower(section), strings.ToLower(name)
 
-	switch {
-	case contains(unsafeSections, section):
-		return "sets a command or a trust decision rather than an identity", true
-	case contains(invertedSections, section) && !contains(safeCoreNames, name):
-		return "is a \"" + section + "\" key outside the settings a profile describes a working tree with", true
-	case contains(unsafeExactNames, name):
-		return "decides what git trusts or where it resolves something from", true
-	case hasUnsafeSuffix(name):
-		return "names a command git runs on its own", true
+	// The family rules are asked first, so a key they match is refused
+	// for what it does rather than for being unfamiliar. Both answers
+	// restrict the key; only the stated reason differs, and the accurate
+	// one is the one a person can act on.
+	if !contains(inertSections, section) {
+		switch {
+		case contains(unsafeSections, section):
+			return "sets a command git runs, or rewrites the URL git contacts", true
+		case contains(unsafeSectionNames[section], name):
+			return "names a program git runs for this " + section, true
+		case contains(unsafeExactNames, name):
+			return "decides what git trusts, writes or resolves something from", true
+		case hasUnsafeSuffix(name):
+			return "names a command git runs, or a path git resolves one from", true
+		}
+	}
+	if !knownKeys()[section+"."+name] {
+		return "is not a setting the git this gitcd was built against documents", true
 	}
 	return "", false
+}
+
+// keyCanBeRestricted reports whether key is one UnsafeKeyReason would
+// ever restrict, for any value. It is what an AllowUnsafeKeysKey entry
+// is checked against: an entry carries a key, not a value, so the value
+// dependent half of the decision cannot be applied to it, and an entry
+// naming a key that no value would restrict is an error rather than a
+// no-op.
+func keyCanBeRestricted(key string) bool {
+	section, _, name, err := SplitKey(key)
+	if err != nil {
+		return false
+	}
+	section, name = strings.ToLower(section), strings.ToLower(name)
+
+	if contains(inertSections, section) {
+		return !knownKeys()[section+"."+name]
+	}
+	return !knownKeys()[section+"."+name] ||
+		contains(unsafeSections, section) ||
+		contains(unsafeSectionNames[section], name) ||
+		contains(unsafeExactNames, name) ||
+		hasUnsafeSuffix(name)
 }
 
 // hasUnsafeSuffix reports whether name, already lowercased, ends in one
@@ -355,7 +485,7 @@ func allowedUnsafeKeys(entries []string) (map[string]bool, error) {
 		if err := ValidateProfileKey(entry); err != nil {
 			return nil, fmt.Errorf("%s: %w", AllowUnsafeKeysKey, err)
 		}
-		if _, unsafe := UnsafeKeyReason(entry); !unsafe {
+		if !keyCanBeRestricted(entry) {
 			return nil, fmt.Errorf(
 				"%w: %s names %q, which a profile may carry without being opted in", ErrInvalidProfile, AllowUnsafeKeysKey, entry,
 			)
@@ -380,7 +510,7 @@ func validateProfileEntry(key, value string, allowed map[string]bool) error {
 	if err := ValidateProfileValue(value); err != nil {
 		return fmt.Errorf("key %q: %w", key, err)
 	}
-	why, unsafe := UnsafeKeyReason(key)
+	why, unsafe := UnsafeKeyReason(key, value)
 	if !unsafe {
 		return nil
 	}
@@ -486,15 +616,63 @@ func ValidateRule(r Rule) error {
 // include file's conditions. An alias is interpolated into the
 // "hasconfig:remote.*.url:" glob of every rule naming the host it
 // resolves to, in exactly the position the rule's own host occupies, so
-// it is held to the same class as a rule host: a glob metacharacter here
-// widens a rule to every host, which is the widening a literal glob in
-// an owner is refused to prevent.
+// it is held to the same terms: a glob metacharacter here widens a rule
+// to every host, which is the widening a literal glob in an owner is
+// refused to prevent.
+//
+// Its class is a shade wider than a rule host's, by one character. An
+// alias is not a DNS name but an ssh_config "Host" name, which may
+// carry an underscore, and people do name a host that way; a rule's
+// owner and repo already accept one. Nothing else is added: the
+// underscore cannot widen a glob or close a condition.
 func ValidateHostAlias(host, alias string) error {
 	if alias == "" {
 		return fmt.Errorf("%w: host %q has an empty alias", ErrInvalidProfile, host)
 	}
-	if !ruleHost.MatchString(alias) {
+	if !hostAlias.MatchString(alias) {
 		return fmt.Errorf("%w: alias %q of host %q is not a host name", ErrInvalidProfile, alias, host)
+	}
+	return nil
+}
+
+// ValidateRoot reports whether root, already expanded, can be rendered
+// into the include file's "gitdir/i:" condition, which every rule's
+// directory pattern is rooted at.
+//
+// Its class is neither a rule field's nor a layout template's. It is an
+// absolute path the person chooses, so it carries "/" like a layout but
+// no placeholders, and unlike either it may hold a space or a
+// non-ASCII character, because a home directory does: holding it to a
+// rule field's narrow class would refuse a root nobody could rename.
+//
+// What it must not hold is what would change the meaning of the
+// condition rather than name a directory: a glob metacharacter, which
+// widens the pattern past the root and matches repositories gitcd never
+// placed; a quote or a line break, which closes the condition and makes
+// git refuse the file the global configuration includes; any other
+// control character; and a "." or ".." segment, which roots the whole
+// pattern somewhere other than where it reads.
+func ValidateRoot(root string) error {
+	switch {
+	case root == "":
+		return fmt.Errorf("%w: root may not be empty", ErrInvalidProfile)
+	case !filepath.IsAbs(root):
+		return fmt.Errorf("%w: root %q is not an absolute path", ErrInvalidProfile, root)
+	}
+	for _, r := range root {
+		switch {
+		case isControl(r):
+			return fmt.Errorf("%w: root %q holds a control character", ErrInvalidProfile, root)
+		case strings.ContainsRune(`*?[]{}"`, r):
+			return fmt.Errorf(
+				"%w: root %q holds %q, which would change what the generated conditions match", ErrInvalidProfile, root, r,
+			)
+		}
+	}
+	for _, segment := range strings.Split(filepath.ToSlash(root), "/") {
+		if segment == "." || segment == ".." {
+			return fmt.Errorf("%w: root %q holds a relative path segment", ErrInvalidProfile, root)
+		}
 	}
 	return nil
 }
@@ -568,6 +746,9 @@ func ValidateLayout(where, template string) error {
 // it on the configuration it has just parsed, and
 // internal/gitconfig.Render calls it on whatever it is handed.
 func (c Config) Validate() error {
+	if err := ValidateRoot(c.Root); err != nil {
+		return err
+	}
 	if err := c.validateProfiles(); err != nil {
 		return err
 	}
