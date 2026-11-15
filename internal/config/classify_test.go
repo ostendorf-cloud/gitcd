@@ -142,8 +142,8 @@ func TestUnsafeKeyReason_RestrictsWhatItSaysItDoes(t *testing.T) {
 	for _, tt := range restricted {
 		t.Run(tt.key+" is restricted", func(t *testing.T) {
 			t.Parallel()
-			if why, ok := config.UnsafeKeyReason(tt.key, tt.value); !ok {
-				t.Fatalf("UnsafeKeyReason(%q, %q) = %q, %v, want it restricted", tt.key, tt.value, why, ok)
+			if why, ok := config.UnsafeKeyReason(tt.key); !ok {
+				t.Fatalf("UnsafeKeyReason(%q) = %q, %v, want it restricted", tt.key, why, ok)
 			}
 		})
 	}
@@ -228,8 +228,8 @@ func TestUnsafeKeyReason_RestrictsWhatItSaysItDoes(t *testing.T) {
 	for _, tt := range allowed {
 		t.Run(tt.key+" needs no opt in", func(t *testing.T) {
 			t.Parallel()
-			if why, ok := config.UnsafeKeyReason(tt.key, tt.value); ok {
-				t.Fatalf("UnsafeKeyReason(%q, %q) = %q, %v, want it allowed", tt.key, tt.value, why, ok)
+			if why, ok := config.UnsafeKeyReason(tt.key); ok {
+				t.Fatalf("UnsafeKeyReason(%q) = %q, %v, want it allowed", tt.key, why, ok)
 			}
 		})
 	}
@@ -270,12 +270,12 @@ func TestUnsafeKeyReason_RefusesAnIncludeForBeingAnInclude(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			why, ok := config.UnsafeKeyReason(tt.key, tt.value)
+			why, ok := config.UnsafeKeyReason(tt.key)
 			if !ok {
-				t.Fatalf("UnsafeKeyReason(%q, %q) allowed it, want it restricted", tt.key, tt.value)
+				t.Fatalf("UnsafeKeyReason(%q) allowed it, want it restricted", tt.key)
 			}
 			if why != tt.want {
-				t.Errorf("UnsafeKeyReason(%q, %q) = %q, want %q", tt.key, tt.value, why, tt.want)
+				t.Errorf("UnsafeKeyReason(%q) = %q, want %q", tt.key, why, tt.want)
 			}
 		})
 	}
@@ -314,12 +314,12 @@ func TestUnsafeKeyReason_SaysWhichCategoryRefusedTheKey(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			why, ok := config.UnsafeKeyReason(tt.key, tt.value)
+			why, ok := config.UnsafeKeyReason(tt.key)
 			if !ok {
-				t.Fatalf("UnsafeKeyReason(%q, %q) allowed it, want it restricted", tt.key, tt.value)
+				t.Fatalf("UnsafeKeyReason(%q) allowed it, want it restricted", tt.key)
 			}
 			if why != tt.want {
-				t.Errorf("UnsafeKeyReason(%q, %q) = %q, want %q", tt.key, tt.value, why, tt.want)
+				t.Errorf("UnsafeKeyReason(%q) = %q, want %q", tt.key, why, tt.want)
 			}
 		})
 	}
@@ -341,8 +341,8 @@ func TestUnsafeKeyReason_KeysGitDoesNotEnumerate(t *testing.T) {
 	} {
 		t.Run(tt.key+" is restricted until it is named", func(t *testing.T) {
 			t.Parallel()
-			if _, ok := config.UnsafeKeyReason(tt.key, tt.value); !ok {
-				t.Fatalf("UnsafeKeyReason(%q, %q) allowed a key the generated list does not hold", tt.key, tt.value)
+			if _, ok := config.UnsafeKeyReason(tt.key); !ok {
+				t.Fatalf("UnsafeKeyReason(%q) allowed a key the generated list does not hold", tt.key)
 			}
 		})
 	}
@@ -361,8 +361,9 @@ func TestUnsafeKeyReason_TheValueNeverSetsAFamilyAside(t *testing.T) {
 	t.Run("a boolean looking value does not set a resolved family aside", func(t *testing.T) {
 		t.Parallel()
 		for _, value := range []string{"true", "false", "yes", "no", "on", "off", "1", "0", ""} {
-			if _, ok := config.UnsafeKeyReason("core.sshCommand", value); !ok {
-				t.Errorf("UnsafeKeyReason(core.sshCommand, %q) allowed it, want a resolved key restricted at any value", value)
+			_ = value // the decision depends on the key alone, so every value gets the same answer
+			if _, ok := config.UnsafeKeyReason("core.sshCommand"); !ok {
+				t.Errorf("UnsafeKeyReason(core.sshCommand) allowed it, want a resolved key restricted at any value")
 			}
 		}
 	})
@@ -370,15 +371,15 @@ func TestUnsafeKeyReason_TheValueNeverSetsAFamilyAside(t *testing.T) {
 	t.Run("a section git resolves nothing in is set aside", func(t *testing.T) {
 		t.Parallel()
 		for _, key := range []string{"advice.ignoredHook", "advice.waitingForEditor", "advice.updateSparsePath", "color.pager"} {
-			if why, ok := config.UnsafeKeyReason(key, "false"); ok {
-				t.Errorf("UnsafeKeyReason(%q, \"false\") = %q, want it allowed", key, why)
+			if why, ok := config.UnsafeKeyReason(key); ok {
+				t.Errorf("UnsafeKeyReason(%q) = %q, want it allowed", key, why)
 			}
 		}
 	})
 
 	t.Run("the set aside does not reach a key git does not document", func(t *testing.T) {
 		t.Parallel()
-		if _, ok := config.UnsafeKeyReason("advice.somethingGitAddedLater", "false"); !ok {
+		if _, ok := config.UnsafeKeyReason("advice.somethingGitAddedLater"); !ok {
 			t.Fatal("UnsafeKeyReason() allowed an undocumented key in an inert section, want it restricted")
 		}
 	})
@@ -395,7 +396,7 @@ func TestExtraKnownGitKeys(t *testing.T) {
 		if config.GeneratedGitKeyForTest(key) {
 			t.Errorf("the addendum carries %q, which the generated list now holds too; remove the addendum entry", key)
 		}
-		if _, ok := config.UnsafeKeyReason(key, "true"); ok {
+		if _, ok := config.UnsafeKeyReason(key); ok {
 			t.Errorf("the addendum carries %q, which the family rules restrict anyway; it does not belong there", key)
 		}
 	}
