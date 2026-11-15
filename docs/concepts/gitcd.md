@@ -85,9 +85,9 @@
 ## Open questions
 
 - Repositories outside `root` are reachable through `hasconfig` regardless of being managed.
-  Should `list` and `status` find them too, and from what index. `list` (issue #3) and `status`
-  (issue #5) both shipped without answering it, each listing indexing outside `root` as out of
-  scope in turn.
+  Should `list` and `status` find them too, and from what index. `list` (issue #3) shipped
+  without answering it, listing indexing outside `root` as out of scope, and `status` (issue #5)
+  shipped without raising the question at all.
 - Should `cd` prefer an installed `fzf` over the built in picker. Next step: deferred until the
   built in picker has seen real use.
 - Does a profile need a per host `core.sshCommand` to pin an identity file, or do SSH host

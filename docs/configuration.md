@@ -136,46 +136,8 @@ A key under the `remote` section is rejected: a profile is reached through an `i
 condition that itself depends on the remote's own URL, so a profile setting one would make that
 condition depend on its own consequence.
 
-### Profile keys, values and names, and `allowUnsafeKeys`
-
-> The behaviour in this section describes branch `fix/config-validation`, not yet merged into
-> `main`. `main` today validates only that a profile key parses as a `section.key` (or
-> `section.subsection.key`) git config key and does not sit under `remote`.
-
 A profile name is a file name: it becomes `~/.config/gitcd/profiles/<name>.gitconfig`, and it is
-also what a person types at `gitcd profile set <name>` or in a rule's `profile` field. It must
-hold only letters, digits, `.`, `-` and `_`, begin and end with a letter or a digit, and not be a
-name Windows reserves for a device (`con`, `nul`, `com1`, and so on), so the same configuration
-renders correctly on every platform gitcd supports.
-
-A profile value may hold any character git config itself can read back from a double quoted
-string; a control character with no such escape, a literal line break above all, is rejected,
-because a value gitcd cannot render would make git refuse the whole include chain, not only one
-command.
-
-A profile key that hands control of a subprocess, a credential prompt or a remote URL rewrite to
-the configuration file is refused unless `allowUnsafeKeys` names it explicitly. A profile is
-picked automatically, per remote, by a rule nobody re-reads on every clone, so a key that makes
-git run a command, answer a credential prompt, or decide what a checkout writes to the
-filesystem should not be something that configuration silently carries. This covers whole
-families of keys, not a fixed list: `core.sshCommand`, `credential.helper`, `alias.*`, every
-`*.proxy`, `*.editor` and `*.pager` key, a diff or merge tool's `path`, a content filter's
-`clean` or `smudge` command, `url.*.insteadOf`, and `core.sharedRepository`,
-`core.protectNTFS`, `core.protectHFS` and `core.symlinks` alongside them, which do not run
-anything but decide what git trusts or writes.
-
-```yaml
-allowUnsafeKeys:
-  - core.sshCommand
-profiles:
-  work:
-    user.email: jane@work.example
-    core.sshCommand: ssh -i ~/.ssh/id_ed25519_work
-```
-
-Each entry names exactly one key, in the same `section.key` form a profile key uses; a wildcard
-is refused, and so is an entry naming a key that was never restricted in the first place, since
-either would sit in the file looking like it permits something it does not.
+also what a person types at `gitcd profile set <name>` or in a rule's `profile` field.
 
 ## `rules`
 

@@ -360,10 +360,23 @@ case of, a missing or stale managed file, and a global git identity key, which
   mismatch and every global identity key, is always reported and never touched: a value
   `doctor` did not write is never one it overwrites.
 - `--dry-run`, with `--fix`, prints what would change without writing or moving anything.
-- `--json` prints a structured object instead of the text report: `configPath`, `managedDir`,
-  `fixed` and `findings`, each finding carrying its kind, the repository or path it is about,
-  and a message. With `--fix --json`, every fix progress line that would otherwise go to stdout
-  goes to stderr instead, so stdout carries nothing but the one encoded object.
+- `--json` prints a structured object instead of the text report: `configPath` and `managedDir`
+  always, `findings` when any finding remains outstanding, and `fixed` when `--fix` repaired
+  something. Each entry in either list carries:
+  - `kind`: the finding class, such as `identity-drift`, `path-mismatch`,
+    `path-case-mismatch`, `managed-file-missing`, `managed-file-stale` or
+    `global-identity-key`.
+  - `repo`: the repository's name, `/` separated relative to `root`. Omitted for a finding tied
+    to no single repository, a managed file or a global identity key.
+  - `path`: the absolute path the finding is about, a repository's own path or a managed file's.
+    Omitted when neither applies.
+  - `message`: the same text the report prints for this finding.
+  - `fixable`: whether `--fix` repairs this finding mechanically. Always present.
+  - `wantPath`: the absolute path `--fix` would rename `path` to. Present only on
+    `path-case-mismatch`.
+
+  With `--fix --json`, every fix progress line that would otherwise go to stdout goes to stderr
+  instead, so stdout carries nothing but the one encoded object.
 - `--verbose` enables debug logging on stderr.
 
 ```sh
@@ -411,9 +424,9 @@ Exit codes:
 
 - `0`: the repository was adopted (or was already at the path the layout renders), including
   when it was already at the target with nothing left to move.
-- `1`: the path is not a git repository, is bare, is a linked worktree or still has one, has
-  `extensions.worktreeConfig` enabled, the target already exists, the move was declined or
-  failed, or a configuration fix after the move failed.
+- `1`: the path does not exist, exists but is not a git repository, is bare, is a linked
+  worktree or still has one, has `extensions.worktreeConfig` enabled, the target already
+  exists, the move was declined or failed, or a configuration fix after the move failed.
 - `2`: not exactly one path was given.
 
 ## shell-init
