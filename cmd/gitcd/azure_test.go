@@ -238,6 +238,47 @@ func TestAzureDevOpsSync_WithholdsWhenAnyConfiguredUrlCarriesAToken(t *testing.T
 	}
 }
 
+// TestAzureDevOpsQuery_WithholdsGitOutput uses the documented form with a
+// query or a fragment, where a secret may sit. The exemption does not apply,
+// so clone and sync withhold git's output. Redact masks only userinfo, so
+// the query itself is not masked in the URL gitcd prints; this test pins
+// the withholding only.
+func TestAzureDevOpsQuery_WithholdsGitOutput(t *testing.T) {
+	urls := []string{
+		azureHTTPSWithUser + "?access_token=" + azureToken,
+		azureHTTPSWithUser + "#" + azureToken,
+	}
+	for _, url := range urls {
+		t.Run("clone "+url, func(t *testing.T) {
+			home := setupEnv(t)
+			redirectToMissing(t, home, url)
+
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"clone", url}, &stdout, &stderr); code == 0 {
+				t.Fatalf("clone = 0, want a failure, stderr: %q", stderr.String())
+			}
+			if !strings.Contains(stderr.String(), azureWithheld) {
+				t.Errorf("git's output is not withheld, stderr: %q", stderr.String())
+			}
+		})
+		t.Run("sync "+url, func(t *testing.T) {
+			home := setupEnv(t)
+			repo := azureRepoPath(home)
+			initRepository(t, repo)
+			addRemote(t, repo, url)
+			redirectToMissing(t, home, url)
+
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"sync"}, &stdout, &stderr); code == 0 {
+				t.Fatalf("sync = 0, want a failure, stderr: %q", stderr.String())
+			}
+			if !strings.Contains(stderr.String(), azureWithheld) {
+				t.Errorf("git's output is not withheld, stderr: %q", stderr.String())
+			}
+		})
+	}
+}
+
 // TestAzureDevOpsFormsLandInOneDirectory dry runs clone for the clone dialog
 // forms and requires the same destination.
 func TestAzureDevOpsFormsLandInOneDirectory(t *testing.T) {

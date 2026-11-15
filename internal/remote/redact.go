@@ -109,6 +109,11 @@ func Redact(s string) string {
 //     decoded
 //   - the first path segment is there and equals the decoded user, ignoring
 //     case
+//   - nothing after the host contains a "?" or a "#", so a URL with a query
+//     or a fragment, where a secret may sit, is never exempt. A percent
+//     encoded %3F or %23 is path text for git, not a query: it does not
+//     stop the exemption, except in the organisation segment, where the
+//     decoded name no longer equals a plain user.
 //
 // rest is the text after the "@", up to the end of the region Redact looks
 // at. A token in the user slot passes only if the path repeats it as its
@@ -119,6 +124,11 @@ func isAzureOrganisationUser(scheme, userinfo, rest string) bool {
 	}
 	user, err := url.PathUnescape(userinfo)
 	if err != nil || !plainUserPattern.MatchString(user) {
+		return false
+	}
+	// A query or a fragment anywhere after the host may carry a secret, as in
+	// "?access_token=...", and git echoes the whole URL: never exempt.
+	if strings.ContainsAny(rest, "?#") {
 		return false
 	}
 	host, path, ok := strings.Cut(rest, "/")

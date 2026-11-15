@@ -142,6 +142,17 @@ func TestRedact_AzureDevOpsExemption(t *testing.T) {
 		{name: "plain http", input: "http://ORG@dev.azure.com/ORG" + tail, want: "http://***@dev.azure.com/ORG" + tail},
 		{name: "other scheme", input: "git+https://ORG@dev.azure.com/ORG" + tail, want: "git+https://***@dev.azure.com/ORG" + tail},
 		{name: "query after the host", input: "https://ORG@dev.azure.com?x=/ORG" + tail, want: "https://***@dev.azure.com?x=/ORG" + tail},
+		{name: "query after the path", input: "https://ORG@dev.azure.com/ORG" + tail + "?access_token=" + azureToken, want: "https://***@dev.azure.com/ORG" + tail + "?access_token=" + azureToken},
+		{name: "fragment after the path", input: "https://ORG@dev.azure.com/ORG" + tail + "#" + azureToken, want: "https://***@dev.azure.com/ORG" + tail + "#" + azureToken},
+		{name: "query after the organisation segment", input: "https://ORG@dev.azure.com/ORG?t=" + azureToken + "/PROJECT/_git/REPO", want: "https://***@dev.azure.com/ORG?t=" + azureToken + "/PROJECT/_git/REPO"},
+		{name: "query holding the organisation name", input: "https://ORG@dev.azure.com/ORG" + tail + "?x=ORG", want: "https://***@dev.azure.com/ORG" + tail + "?x=ORG"},
+		{name: "query inside git's error text", input: "fatal: unable to access 'https://ORG@dev.azure.com/ORG" + tail + "?k=" + azureToken + "/'", want: "fatal: unable to access 'https://***@dev.azure.com/ORG" + tail + "?k=" + azureToken + "/'"},
+		// Encoded, they are path text for git: still exempt in a later
+		// segment, redacted in the organisation segment.
+		{name: "encoded question mark in a later segment", input: "https://ORG@dev.azure.com/ORG/PROJECT%3Fx/_git/REPO", want: "https://ORG@dev.azure.com/ORG/PROJECT%3Fx/_git/REPO"},
+		{name: "encoded number sign in a later segment", input: "https://ORG@dev.azure.com/ORG/PROJECT%23x/_git/REPO", want: "https://ORG@dev.azure.com/ORG/PROJECT%23x/_git/REPO"},
+		{name: "encoded question mark in the user", input: "https://ORG%3Fx@dev.azure.com/ORG" + tail, want: "https://***@dev.azure.com/ORG" + tail},
+		{name: "encoded number sign in the organisation segment", input: "https://ORG@dev.azure.com/ORG%23x" + tail, want: "https://***@dev.azure.com/ORG%23x" + tail},
 		{
 			name:  "an at sign later in the text moves the end of the userinfo",
 			input: "https://ORG@dev.azure.com/ORG" + tail + "?e=" + azureToken + "@x",
