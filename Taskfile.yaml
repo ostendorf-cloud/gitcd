@@ -60,6 +60,11 @@ tasks:
     cmds:
       - goreleaser check
 
+  lint:shell:
+    desc: Shell script lint for this repository's own CI scripts
+    cmds:
+      - shellcheck scripts/*.sh
+
   lint:secrets:
     desc: Secret scan over the git history
     cmds:
@@ -75,6 +80,11 @@ tasks:
     cmds:
       - go test -race -count=1 -run TestShellWrapper_ExecutesInPowerShell ./cmd/gitcd/...
 
+  test:shell:
+    desc: Shell script tests for this repository's own CI scripts
+    cmds:
+      - scripts/publish-release-assets_test.sh
+
   check:
     desc: Every check, one after another
     cmds:
@@ -85,9 +95,11 @@ tasks:
       - task: lint:yaml
       - task: lint:actions
       - task: lint:goreleaser
+      - task: lint:shell
       - task: lint:secrets
       - task: test:go
       - task: test:pwsh
+      - task: test:shell
       - task: build
 
   fmt:

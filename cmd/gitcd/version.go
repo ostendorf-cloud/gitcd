@@ -9,10 +9,11 @@ import (
 	"io"
 )
 
-// runVersion implements "gitcd version": it prints the version this binary
-// was built with on stdout. It takes no argument and no flag, and carries a
-// flag set for that reason alone: parsing rejects an unknown flag, so a
-// typed flag that does not exist is named rather than silently dropped.
+// runVersion implements "gitcd version": it prints the version, the commit
+// and the build date this binary was made from on stdout, so a bug report
+// identifies exactly what was built. It takes no argument and no flag, and
+// carries a flag set for that reason alone: parsing rejects an unknown flag,
+// so a typed flag that does not exist is named rather than silently dropped.
 func runVersion(args []string, stdout, stderr io.Writer) int {
 	fset := flag.NewFlagSet("gitcd version", flag.ContinueOnError)
 	fset.SetOutput(stderr)
@@ -25,6 +26,6 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	fmt.Fprintln(stdout, Version)
+	fmt.Fprintf(stdout, "gitcd %s (commit %s, built %s)\n", Version, Commit, Date)
 	return 0
 }

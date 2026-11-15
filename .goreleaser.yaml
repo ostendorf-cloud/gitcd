@@ -12,15 +12,28 @@ builds:
     goos:
       - darwin
       - linux
+      - windows
     goarch:
       - arm64
       - amd64
     ldflags:
-      - -s -w -X main.Version={{ .Version }}
+      - -s -w -X main.Version={{ .Version }} -X main.Commit={{ .FullCommit }} -X main.Date={{ .Date }}
 
 archives:
   - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+
+# No release section: release.yaml always runs this with --skip=publish,
+# since goreleaser's own GitHub release handling cannot see the draft
+# release release-me already created for the tag (GitHub's "get a release
+# by tag" lookup excludes drafts). release.yaml attaches the archives and
+# checksums built here with "gh release upload" and publishes with
+# "gh release edit --draft=false" instead. See
+# docs/adr/0001-draft-releases-until-assets-attach.md in release-me's own
+# repository, the organisation's precedent for this shape.

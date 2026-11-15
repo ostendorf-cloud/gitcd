@@ -43,8 +43,27 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.sha }}
           fetch-depth: 0
 
-      - name: Tag and release every merged release pull request
+      # release-me.yaml sets github-release-draft-until-assets-attach: true,
+      # so this repository's own release is a draft, and publishing it is
+      # on this same job: a draft fires no "release" webhook at all, so a
+      # second, webhook-triggered workflow would never run. See
+      # .goreleaser.yaml and release-me's own
+      # docs/adr/0001-draft-releases-until-assets-attach.md, the
+      # organisation's precedent for this shape.
+      - name: Tag and draft a release for every merged release pull request
+        id: release-me
         uses: ostendorf-cloud/release-me/action@e3346c4a5aa463642e8d0627b01b3308dc49e2ec  # v0.5.1
         with:
           token: ${{ steps.app-token.outputs.token }}
           app-slug: ${{ steps.app-token.outputs.app-slug }}
+
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+        if: steps.release-me.outputs.tags != ''
+
+      - name: Build, attach and publish the assets for every tag just released
+        if: steps.release-me.outputs.tags != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAGS: ${{ steps.release-me.outputs.tags }}
+        run: ./scripts/publish-release-assets.sh

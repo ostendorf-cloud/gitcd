@@ -32,6 +32,8 @@ not repeated here.
   directory alike, and asking git for the linked worktrees that boundary skips past.
 - `internal/shell/`: the per shell init snippet `shell-init` prints, including the `cd` tab
   completion registered for zsh and fish.
+- `scripts/`: CI glue specific to this repository's own workflows, such as attaching and
+  publishing release assets after `release.yaml` drafts a release.
 
 Whether a linked worktree counts as one of the repositories a command reports is a single,
 stated rule, not a separate choice per command: `cmd/gitcd/repos.go`'s `scanRepositories` doc
@@ -80,3 +82,8 @@ task run -- clone github.com/acme/widget   # run the CLI from source
 - yamllint's line-length limit is 140, not the default 120. A pinned reusable workflow
   reference needs the full line for its commit digest and version comment. Most of the
   organisation's repositories already run at 140.
+- `scripts/publish-release-assets.sh` is adapted from release-me's script of the same name and
+  stays in this repository instead of the shared scripts repository: a release path must not
+  fetch a script from another repository at release time, where a failure burns a version
+  number permanently. Keep it in step with release-me's copy; a third consumer moves it to the
+  shared repository.
