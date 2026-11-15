@@ -638,7 +638,8 @@ func TestLoad_Root(t *testing.T) {
 	}
 
 	t.Run("an ordinary root, a space and a non-ASCII name included, is accepted", func(t *testing.T) {
-		for _, root := range []string{"~/Code", "/tmp/My Code", "/tmp/Código", "~"} {
+		base := filepath.ToSlash(t.TempDir())
+		for _, root := range []string{"~/Code", base + "/My Code", base + "/Código", "~"} {
 			home := withHome(t)
 			writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+strconv.Quote(root)+"\n")
 
