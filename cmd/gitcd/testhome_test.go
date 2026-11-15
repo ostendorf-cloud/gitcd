@@ -17,16 +17,6 @@ func gitConfigEscaped(path string) string {
 	return strings.ReplaceAll(path, `\`, `\\`)
 }
 
-// fileURL returns the file URL of an absolute path. A Windows path needs a
-// leading slash and forward slashes: "file://C:\x" is not a URL git reads.
-func fileURL(path string) string {
-	path = filepath.ToSlash(path)
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return "file://" + path
-}
-
 // samePath reports whether a and b name the same location. Each is
 // resolved through its longest existing ancestor with filepath.EvalSymlinks,
 // which on Windows also turns a short (8.3) name into the long one, and the

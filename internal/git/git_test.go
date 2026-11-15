@@ -185,7 +185,7 @@ func TestRemoteURL_IsNotResolvedThroughAnInsteadOfRewrite(t *testing.T) {
 	initRepository(t, source)
 
 	requested := "https://example.test/acme/widget.git"
-	run(t, root, "config", "--global", "url."+fileURL(source)+".insteadOf", requested)
+	run(t, root, "config", "--global", "url."+testenv.FileURL(source)+".insteadOf", requested)
 
 	dest := filepath.Join(root, "dest")
 	if err := git.Clone(context.Background(), requested, dest, io.Discard); err != nil {

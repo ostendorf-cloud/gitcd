@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ostendorf-cloud/gitcd/internal/testenv"
 )
 
 func TestRunClone_DryRunPrintsThePathWithoutCloning(t *testing.T) {
@@ -41,7 +43,7 @@ func TestRunClone_ClonesAFreshTargetThroughARewrittenOfflineURL(t *testing.T) {
 	// The URL rewrite git itself applies before ever touching the network,
 	// pointed at the local source instead: this clone never leaves the
 	// machine.
-	runGit(t, home, "config", "--global", "url."+fileURL(source)+".insteadOf", input)
+	runGit(t, home, "config", "--global", "url."+testenv.FileURL(source)+".insteadOf", input)
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"clone", input}, &stdout, &stderr)
@@ -195,7 +197,7 @@ profiles:
 	source := filepath.Join(home, "upstream")
 	initRepository(t, source)
 	input := "https://example.test/acme/widget.git"
-	runGit(t, home, "config", "--global", "url."+fileURL(source)+".insteadOf", input)
+	runGit(t, home, "config", "--global", "url."+testenv.FileURL(source)+".insteadOf", input)
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"clone", "--profile", "work", input}, &stdout, &stderr)
@@ -238,7 +240,7 @@ profiles:
 	source := filepath.Join(home, "upstream")
 	initRepository(t, source)
 	input := "https://example.test/acme/widget.git"
-	runGit(t, home, "config", "--global", "url."+fileURL(source)+".insteadOf", input)
+	runGit(t, home, "config", "--global", "url."+testenv.FileURL(source)+".insteadOf", input)
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"clone", "--profile", "work", input}, &stdout, &stderr)
