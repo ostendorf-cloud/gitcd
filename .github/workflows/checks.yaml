@@ -30,6 +30,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+      - name: Cache Go modules and build output
+        # Module cache avoids re-downloading dependencies, build cache keeps
+        # a recompile fast instead of starting cold.
+        #
+        # Own key, since test, pwsh and build each cache a different module
+        # set. A miss falls back to this job's own cache first, then to the
+        # others, which still covers most packages.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-vet-${{ hashFiles('go.sum', 'mise.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-vet-
+            ${{ runner.os }}-test-
+            ${{ runner.os }}-pwsh-
+            ${{ runner.os }}-build-
       - run: task lint:vet
 
   golangci:
@@ -38,6 +56,32 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+      - name: Cache Go modules, build output and golangci-lint
+        # Caches the same module and build directories as the other Go
+        # jobs, plus golangci-lint's own analysis cache.
+        #
+        # Own cache key, like vet, test, pwsh and build each have.
+        # actions/cache reserves a key for whichever job saves it first, so
+        # a shared key across jobs would silently drop the others' saves.
+        # This job also caches the golangci-lint analysis directory the
+        # other jobs don't use, which is why none of them falls back to
+        # this key. The reverse holds though: falling back to a sibling
+        # gives this job their module and build cache without the lint
+        # directory, which is incomplete rather than wrong, and better
+        # than cold.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: ${{ runner.os }}-golangci-${{ hashFiles('go.sum', 'mise.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-golangci-
+            ${{ runner.os }}-vet-
+            ${{ runner.os }}-test-
+            ${{ runner.os }}-pwsh-
+            ${{ runner.os }}-build-
       - run: task lint:golangci
 
   markdownlint:
@@ -96,6 +140,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+      - name: Cache Go modules and build output
+        # Module cache avoids re-downloading dependencies, build cache keeps
+        # a recompile fast instead of starting cold.
+        #
+        # Own key, since vet, pwsh and build each cache a different module
+        # set. A miss falls back to this job's own cache first, then to the
+        # others, which still covers most packages.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-test-${{ hashFiles('go.sum', 'mise.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-test-
+            ${{ runner.os }}-vet-
+            ${{ runner.os }}-pwsh-
+            ${{ runner.os }}-build-
       - run: task test:go
 
   pwsh:
@@ -104,6 +166,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+      - name: Cache Go modules and build output
+        # test:pwsh is a go test run too, scoped to one test name, and
+        # needs the same module and build cache as the other Go jobs.
+        #
+        # Own key, since vet, test and build each cache a different module
+        # set. A miss falls back to this job's own cache first, then to the
+        # others, which still covers most packages.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-pwsh-${{ hashFiles('go.sum', 'mise.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pwsh-
+            ${{ runner.os }}-vet-
+            ${{ runner.os }}-test-
+            ${{ runner.os }}-build-
       - run: task test:pwsh
 
   shelltest:
@@ -120,4 +200,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+      - name: Cache Go modules and build output
+        # Module cache avoids re-downloading dependencies, build cache keeps
+        # a recompile fast instead of starting cold.
+        #
+        # Own key, since vet, test and pwsh each cache a different module
+        # set. A miss falls back to this job's own cache first, then to the
+        # others, which still covers most packages.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-build-${{ hashFiles('go.sum', 'mise.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-build-
+            ${{ runner.os }}-vet-
+            ${{ runner.os }}-test-
+            ${{ runner.os }}-pwsh-
       - run: task build
