@@ -1,7 +1,19 @@
-# Only this key departs from release-me's defaults: a single "main"
-# component, first-parent changelog, default labels and an immediate
-# publish all suit this repository already. GitHub's immutable releases
-# setting cannot be read back through the API, so this stays on
-# regardless of whether it is currently enabled for this repository; see
-# release-me's own docs/adr/0001-draft-releases-until-assets-attach.md.
+# Two keys, and the rest of release-me's defaults suit this repository
+# already: a single "main" component, first-parent changelog and the
+# default labels.
+#
+# github-release-draft-until-assets-attach replaces the immediate publish
+# with a draft that release.yaml attaches assets to and publishes itself.
+# GitHub's immutable releases setting cannot be read back through the API,
+# so this stays on regardless of whether it is currently enabled for this
+# repository; see release-me's own
+# docs/adr/0001-draft-releases-until-assets-attach.md.
+#
+# force-tag-creation is release-me's default, pinned here because
+# scripts/publish-release-assets.sh depends on it: the script adds a
+# worktree at the tag and goreleaser resolves it through
+# GORELEASER_CURRENT_TAG, so both need the tag to exist while the release
+# is still a draft. With it off, GitHub creates the tag only on publish
+# and every release would fail at the worktree add.
 github-release-draft-until-assets-attach: true
+force-tag-creation: true

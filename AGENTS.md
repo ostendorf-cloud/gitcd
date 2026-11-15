@@ -82,3 +82,8 @@ task run -- clone github.com/acme/widget   # run the CLI from source
 - yamllint's line-length limit is 140, not the default 120. A pinned reusable workflow
   reference needs the full line for its commit digest and version comment. Most of the
   organisation's repositories already run at 140.
+- `scripts/publish-release-assets.sh` is adapted from release-me's script of the same name and
+  stays in this repository instead of the shared scripts repository: a release path must not
+  fetch a script from another repository at release time, where a failure burns a version
+  number permanently. Keep it in step with release-me's copy; a third consumer moves it to the
+  shared repository.
