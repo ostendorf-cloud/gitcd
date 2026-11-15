@@ -105,6 +105,14 @@ func TestShellWrapper_ExecutesInPowerShell(t *testing.T) {
 		{"CD_COMPLETIONS", "widget"},
 		{"STATUS_COMPLETION_COUNT", "0"},
 	} {
+		if want.key == "DRYRUN_OUT" || want.key == "CLONE_CWD" {
+			// A path: the same directory can be spelled with a short
+			// (8.3) or a long name on Windows.
+			if !samePath(got[want.key], want.value) {
+				t.Errorf("%s = %q, want %q (full powershell output:\n%s)", want.key, got[want.key], want.value, out)
+			}
+			continue
+		}
 		if got[want.key] != want.value {
 			t.Errorf("%s = %q, want %q (full powershell output:\n%s)", want.key, got[want.key], want.value, out)
 		}

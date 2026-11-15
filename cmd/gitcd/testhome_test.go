@@ -27,6 +27,28 @@ func fileURL(path string) string {
 	return "file://" + path
 }
 
+// samePath reports whether a and b name the same location. Each is
+// resolved through its longest existing ancestor with filepath.EvalSymlinks,
+// which on Windows also turns a short (8.3) name into the long one, and the
+// not yet existing rest is appended unchanged.
+func samePath(a, b string) bool {
+	return resolveExisting(a) == resolveExisting(b)
+}
+
+func resolveExisting(path string) string {
+	path = filepath.Clean(path)
+	rest := ""
+	for p := path; ; p = filepath.Dir(p) {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		if filepath.Dir(p) == p {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+	}
+}
+
 // skipWithoutUnixModes skips a test that asserts Unix permission bits or
 // relies on a mode that blocks access. Windows reports only 0o666 or
 // 0o444 for a file and ignores a 0o000 directory mode.

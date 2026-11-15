@@ -282,7 +282,7 @@ func TestRender_ConditionsStayScopedToWhatTheRuleNames(t *testing.T) {
 				}
 				switch {
 				case strings.HasPrefix(condition, "gitdir/i:"):
-					if !strings.HasPrefix(strings.TrimPrefix(condition, "gitdir/i:"), root+"/") {
+					if !strings.HasPrefix(strings.TrimPrefix(condition, "gitdir/i:"), filepath.ToSlash(root)+"/") {
 						t.Errorf("the include file carries the condition %q, want one rooted at %q", condition, root)
 					}
 				case strings.HasPrefix(condition, "hasconfig:"):
