@@ -306,6 +306,8 @@ func TestUnsafeKeyReason_SaysWhichCategoryRefusedTheKey(t *testing.T) {
 		{"the trust store an ssh signature is checked against", "gpg.ssh.allowedSignersFile", "/home/simon/.signers", trustReason},
 		{"a directory of CA certificates", "http.sslCAPath", "/tmp/ca", trustReason},
 		{"an address every request for a host goes to", "http.curloptResolve", "example.test:443:127.0.0.1", trustReason},
+		{"a proxy every request goes through", "http.proxy", "http://proxy.example.test:3128", trustReason},
+		{"a command git runs to reach a remote", "core.gitProxy", "/usr/local/bin/corkscrew", suffixReason},
 		{"an object check severity", "fsck.missingEmail", "ignore", fsckReason},
 		{"an object check severity on the receiving side", "receive.fsck.missingEmail", "ignore", fsckReason},
 		{"a path git resolves a command from", "core.hooksPath", "/home/simon/.githooks", suffixReason},

@@ -154,7 +154,7 @@ decide what git trusts. It covers `core.protectHFS`, `core.protectNTFS`,
 `core.sharedRepository`, `core.symlinks`, `safe.directory`, `safe.bareRepository`,
 `protocol.allow`, `credential.protectProtocol`, `credential.sanitizePrompt`,
 `transfer.credentialsInUrl`, `transfer.fsckObjects`, `fetch.fsckObjects`,
-`receive.fsckObjects`, `gpg.revocationFile`, `gpg.minTrustLevel`,
+`receive.fsckObjects`, `gpg.ssh.revocationFile`, `gpg.minTrustLevel`,
 `gpg.ssh.allowedSignersFile` and twenty `http.*` keys covering TLS verification, the trust
 store and backend, client certificates, cookies, extra headers, redirects and hostname
 resolution.

@@ -153,10 +153,13 @@ var unsafeSections = []string{
 // rather than of the key, and the day the list carries it, this is the
 // rule that has to be there.
 //
-// git documents a form of "submodule.<name>.update" that names a custom
-// command, and says it is not copied out of ".gitmodules" for safety. A
-// profile is a weaker claim to authority than a file in the repository,
-// so if git will not propagate it, gitcd will not write it either.
+// "submodule.<name>.update" takes a "!<command>" form that runs an
+// arbitrary command, which git-submodule(1) documents under its update
+// command, saying that form is unsupported in ".gitmodules" and on the
+// command line. The config variable is therefore the only place it
+// lands, which is exactly where a profile writes. A profile is a weaker
+// claim to authority than a file in the repository, so if git will not
+// take it from ".gitmodules", gitcd will not write it either.
 var unsafeSectionNames = map[string][]string{
 	"filter":    {"clean", "process", "smudge"},
 	"submodule": {"update"},
@@ -219,6 +222,17 @@ var unsafeTrustSectionNames = map[string][]string{
 		"followredirects",
 		"pinnedpubkey",
 		"proactiveauth",
+		// "proxy" is here as well as in the suffix family, which would
+		// refuse it anyway, because the suffix exists for
+		// "core.gitProxy", a command git runs, and this is a URL git
+		// sends its requests to. Only the entry here gives the reason
+		// that is true of it.
+		// "proxy" is here as well as in the suffix family, which would
+		// refuse it anyway, because the suffix exists for
+		// "core.gitProxy", a command git runs, and this is a URL git
+		// sends its requests to. Only the entry here gives the reason
+		// that is true of it.
+		"proxy",
 		"proxysslcainfo",
 		"proxysslcert",
 		"proxysslkey",
@@ -425,12 +439,11 @@ func UnsafeKeyReason(key, value string) (string, bool) {
 	return "", false
 }
 
-// keyCanBeRestricted reports whether key is one UnsafeKeyReason would
-// ever restrict, for any value. It is what an AllowUnsafeKeysKey entry
-// is checked against: an entry carries a key, not a value, so the value
-// dependent half of the decision cannot be applied to it, and an entry
-// naming a key that no value would restrict is an error rather than a
-// no-op.
+// keyCanBeRestricted reports whether key is one UnsafeKeyReason
+// restricts. It is what an AllowUnsafeKeysKey entry is checked against,
+// so an entry naming a key nothing restricts is an error rather than a
+// no-op: an opt in that opts nothing in is a misunderstanding worth
+// reporting, not a line to ignore.
 func keyCanBeRestricted(key string) bool {
 	section, _, name, err := SplitKey(key)
 	if err != nil {
