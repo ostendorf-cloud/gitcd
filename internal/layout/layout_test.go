@@ -230,6 +230,49 @@ func TestParsePath(t *testing.T) {
 	}
 }
 
+// TestAzureDevOpsFormsRenderOneDestination renders both clone dialog forms
+// through the host's project level template and reads the path back: every
+// form lands in the same directory, and the directory parses to the same
+// remote.
+func TestAzureDevOpsFormsRenderOneDestination(t *testing.T) {
+	t.Parallel()
+
+	const tmpl = "{host}/{org}/{project}/{repo}"
+	aliases := map[string]string{"ssh.dev.azure.com": "dev.azure.com"}
+	templates := []layout.Template{{Host: "dev.azure.com", Template: tmpl}}
+
+	inputs := []string{
+		"https://ORG@dev.azure.com/ORG/PROJECT/_git/REPO",
+		"https://dev.azure.com/ORG/PROJECT/_git/REPO",
+		"git@ssh.dev.azure.com:v3/ORG/PROJECT/REPO",
+	}
+	for _, input := range inputs {
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+
+			parsed, err := remote.Parse(input, aliases)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned an unexpected error: %v", input, err)
+			}
+			got, err := layout.Render(tmpl, parsed)
+			if err != nil {
+				t.Fatalf("Render(%q, %+v) returned an unexpected error: %v", tmpl, parsed, err)
+			}
+			const want = "dev.azure.com/ORG/PROJECT/REPO"
+			if got != want {
+				t.Fatalf("Render() = %q, want %q", got, want)
+			}
+			back, err := layout.ParsePath(got, templates, "{host}/{owner}/{repo}")
+			if err != nil {
+				t.Fatalf("ParsePath(%q) returned an unexpected error: %v", got, err)
+			}
+			if back != parsed {
+				t.Fatalf("ParsePath(%q) = %+v, want %+v", got, back, parsed)
+			}
+		})
+	}
+}
+
 // TestRenderKeepsTheRenderedDestinationInsideRoot drives remote.Parse and
 // layout.Render together, one accepted remote form at a time, the way
 // "gitcd clone", "path", "open", "doctor" and "adopt" all do: parse the

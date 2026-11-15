@@ -28,6 +28,29 @@ may repeat part of the credential outside any URL, such as in `Could not resolve
 exit status is kept. Output git writes on its own, outside what gitcd captures, is not
 something gitcd can change, and `--verbose` does not change any of this.
 
+Two user names are not a credential and are shown as they are, with git's output kept:
+
+- A plain user name on an `ssh://` URL, as in `ssh://git@host/acme/widget.git`, and the scp
+  style `git@host:path`.
+- The clone URL Azure DevOps hands out, `https://ORG@dev.azure.com/ORG/PROJECT/_git/REPO`. Its
+  user is the organisation, not a secret. gitcd treats it as that only when the scheme is
+  `https`, the host is exactly `dev.azure.com`, there is no password and the user equals the
+  first path segment, ignoring case and after percent decoding. A user that differs, a
+  password, an empty user, another host or an alias such as `ssh.dev.azure.com`, a port or
+  plain `http` all keep the `***` and the withheld output. So does any URL with a `?` query or
+  a `#` fragment, where a secret may sit. gitcd masks only the user part of a URL, so a query
+  secret stays visible in a URL it prints; keep it out of the remote. The check applies to
+  every URL git may use: one remote, a push URL and a rewrite rule that carries a token still
+  withhold the output of a fetch.
+
+A token put into an Azure DevOps URL, as in `https://TOKEN@dev.azure.com/...`,
+`https://USER:TOKEN@dev.azure.com/...` or `https://:TOKEN@dev.azure.com/...`, parses to the same
+organisation, project and repository, but it is treated as a credential. A token belongs in the
+git credential manager or in `http.extraheader`, not in the URL: Microsoft advises against
+embedding a personal access token in a remote. gitcd cannot tell a token in the user slot from
+an organisation name except through the rule above, so it fails closed. The withholding does
+not inspect `http.extraheader`: git does not print it in normal output.
+
 A remote with an `@` in its path, as in `https://host/acme/r3@v2.git`, is refused as ambiguous
 with a credential: the `@` cannot be told apart from the end of a password that holds a `/`.
 Write the `@` percent encoded as `%40`, as in `https://host/acme/r3%40v2.git`, and the remote

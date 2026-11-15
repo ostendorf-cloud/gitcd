@@ -26,7 +26,7 @@ func TestRedact(t *testing.T) {
 		{name: "password with an at sign", input: "https://user:p@ss@github.com/acme/widget.git", want: "https://***@github.com/acme/widget.git"},
 		{name: "password with a slash", input: "https://user:FAKE/SECRET@127.0.0.1:1/acme/widget.git", want: "https://***@127.0.0.1:1/acme/widget.git"},
 		{name: "token with a slash as user name", input: "https://FAKE/SECRET@host.test/acme/widget.git", want: "https://***@host.test/acme/widget.git"},
-		{name: "azure devops organisation as user", input: "https://ORG@dev.azure.com/ORG/PROJECT/_git/REPO", want: "https://***@dev.azure.com/ORG/PROJECT/_git/REPO"},
+		{name: "azure devops organisation as user", input: "https://ORG@dev.azure.com/ORG/PROJECT/_git/REPO", want: "https://ORG@dev.azure.com/ORG/PROJECT/_git/REPO"},
 		{name: "ssh user only", input: "ssh://git@github.com/acme/widget.git", want: "ssh://git@github.com/acme/widget.git"},
 		{name: "ssh with password", input: "ssh://git:FAKE-SECRET@github.com/acme/widget.git", want: "ssh://***@github.com/acme/widget.git"},
 		{name: "ssh with an encoded colon", input: "ssh://user%3aFAKE-SECRET@host.test:1/acme/widget.git", want: "ssh://***@host.test:1/acme/widget.git"},

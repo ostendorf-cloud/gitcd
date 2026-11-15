@@ -132,6 +132,60 @@ func TestParse(t *testing.T) {
 	}
 }
 
+// TestParse_AzureDevOpsCloneDialogForms parses the two shapes the Azure
+// DevOps clone dialog hands out, with placeholder names, and requires one
+// result for both: the HTTPS form carries the organisation as the URL user,
+// the SSH form is the scp style user@host:path, not ssh://.
+func TestParse_AzureDevOpsCloneDialogForms(t *testing.T) {
+	t.Parallel()
+
+	want := remote.Remote{Host: "dev.azure.com", Owner: "ORG", Project: "PROJECT", Repo: "REPO"}
+	aliases := map[string]string{"ssh.dev.azure.com": "dev.azure.com"}
+
+	tests := []struct {
+		name    string
+		input   string
+		aliases map[string]string
+		want    remote.Remote
+	}{
+		{
+			name:  "https with the organisation as user",
+			input: "https://ORG@dev.azure.com/ORG/PROJECT/_git/REPO",
+			want:  want,
+		},
+		{
+			name:  "https without a user",
+			input: "https://dev.azure.com/ORG/PROJECT/_git/REPO",
+			want:  want,
+		},
+		{
+			name:    "ssh scp style with the alias",
+			input:   "git@ssh.dev.azure.com:v3/ORG/PROJECT/REPO",
+			aliases: aliases,
+			want:    want,
+		},
+		{
+			name:  "ssh scp style without an alias keeps the ssh host",
+			input: "git@ssh.dev.azure.com:v3/ORG/PROJECT/REPO",
+			want:  remote.Remote{Host: "ssh.dev.azure.com", Owner: "ORG", Project: "PROJECT", Repo: "REPO"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := remote.Parse(tt.input, tt.aliases)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned an unexpected error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("Parse(%q) = %+v, want %+v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsShorthand(t *testing.T) {
 	t.Parallel()
 
