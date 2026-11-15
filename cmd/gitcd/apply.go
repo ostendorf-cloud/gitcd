@@ -55,6 +55,13 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// A resolved root git would match but gitcd cannot render is a warning,
+	// not a failure: the configured root's conditions are still written.
+	if resolved, err := gitconfig.RootResolution(cfg.Root); err != nil {
+		fmt.Fprintf(stderr, "gitcd apply: warning: root %q reaches %q through a symlink and no condition is rendered for it: %v\n",
+			cfg.Root, resolved, err)
+	}
+
 	if *dryRun {
 		paths := make([]string, 0, len(rendered))
 		for path := range rendered {

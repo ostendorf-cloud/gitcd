@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +50,51 @@ defaultProfile: private
 
 	if !strings.Contains(stdout.String(), profilePath) {
 		t.Fatalf("apply stdout = %q, want it to list %s", stdout.String(), profilePath)
+	}
+}
+
+// TestRunApply_WarnsForAnUnrenderableSymlinkTarget: a root linked to a
+// directory the root check refuses still applies, with the configured
+// root's condition only and a warning on stderr.
+func TestRunApply_WarnsForAnUnrenderableSymlinkTarget(t *testing.T) {
+	home := setupEnv(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve the temporary directory: %v", err)
+	}
+	target := filepath.Join(base, "a\"b\nc")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Skipf("the file system refuses the directory name: %v", err)
+	}
+	link := filepath.Join(base, "Code")
+	symlinkOrSkip(t, target, link)
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+root: '`+link+`'
+profiles:
+  private:
+    user.email: simon@example.test
+
+rules:
+  - host: github.com
+    profile: private
+`)
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"apply"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("apply = %d, want 0, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "warning") || !strings.Contains(stderr.String(), fmt.Sprintf("%q", target)) {
+		t.Fatalf("apply stderr = %q, want a warning naming %q", stderr.String(), target)
+	}
+	if strings.Count(stderr.String(), "\n") != 1 {
+		t.Fatalf("apply stderr = %q, want the warning on one line", stderr.String())
+	}
+	content, err := os.ReadFile(filepath.Join(home, ".config", "gitcd", "includes.gitconfig"))
+	if err != nil {
+		t.Fatalf("read the include file: %v", err)
+	}
+	if strings.Contains(string(content), `a"b`) || strings.Contains(string(content), "a\\\"b") {
+		t.Fatalf("include file = %q, want no condition for the refused target", content)
 	}
 }
 

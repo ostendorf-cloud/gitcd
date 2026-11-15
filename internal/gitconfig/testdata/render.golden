@@ -7,7 +7,7 @@
 [include]
 	path = "/home/simon/.config/gitcd/profiles/private.gitconfig"
 
-[includeIf "gitdir/i:/home/simon/Code/dev.azure.com/*/*/*/**"]
+[includeIf "gitdir/i:/srv/simon/Code/dev.azure.com/*/*/*/**"]
 	path = "/home/simon/.config/gitcd/profiles/ado.gitconfig"
 
 [includeIf "hasconfig:remote.*.url:git@dev.azure.com:v3/**"]
@@ -19,7 +19,7 @@
 [includeIf "hasconfig:remote.*.url:https://*@dev.azure.com/**"]
 	path = "/home/simon/.config/gitcd/profiles/ado.gitconfig"
 
-[includeIf "gitdir/i:/home/simon/Code/github.com/*/*/**"]
+[includeIf "gitdir/i:/srv/simon/Code/github.com/*/*/**"]
 	path = "/home/simon/.config/gitcd/profiles/private.gitconfig"
 
 [includeIf "hasconfig:remote.*.url:git@github.com:*/**"]
@@ -34,7 +34,7 @@
 [includeIf "hasconfig:remote.*.url:https://*@github.com/**"]
 	path = "/home/simon/.config/gitcd/profiles/private.gitconfig"
 
-[includeIf "gitdir/i:/home/simon/Code/github.com/ostendorf-cloud/secrets/**"]
+[includeIf "gitdir/i:/srv/simon/Code/github.com/ostendorf-cloud/secrets/**"]
 	path = "/home/simon/.config/gitcd/profiles/locked-down.gitconfig"
 
 [includeIf "hasconfig:remote.*.url:git@github.com:ostendorf-cloud/secrets"]

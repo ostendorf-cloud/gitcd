@@ -9,9 +9,12 @@
 package gitconfig
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -198,11 +201,14 @@ func renderIncludes(cfg config.Config, home string) string {
 		fmt.Fprintf(&b, "\n[include]\n\tpath = %s\n", quoteValue(ProfilePath(home, cfg.DefaultProfile)))
 	}
 
+	roots := GitdirRoots(cfg.Root)
 	for _, rule := range profile.SortRules(cfg.Rules) {
 		path := ProfilePath(home, rule.Profile)
 
-		gitdirGlob := renderGitdirGlob(cfg, rule)
-		fmt.Fprintf(&b, "\n[includeIf \"gitdir/i:%s\"]\n\tpath = %s\n", gitdirGlob, quoteValue(path))
+		for _, root := range roots {
+			gitdirGlob := renderGitdirGlob(cfg, rule, root)
+			fmt.Fprintf(&b, "\n[includeIf \"gitdir/i:%s\"]\n\tpath = %s\n", gitdirGlob, quoteValue(path))
+		}
 
 		for _, urlGlob := range hasconfigGlobs(cfg, rule) {
 			fmt.Fprintf(&b, "\n[includeIf \"hasconfig:remote.*.url:%s\"]\n\tpath = %s\n", urlGlob, quoteValue(path))
@@ -223,7 +229,7 @@ var placeholderPattern = regexp.MustCompile(`\{(\w+)\}`)
 // and the whole pattern is rooted at cfg.Root with a trailing "/**", so it
 // also catches a repository whose remote was renamed or removed after
 // gitcd cloned it there.
-func renderGitdirGlob(cfg config.Config, rule config.Rule) string {
+func renderGitdirGlob(cfg config.Config, rule config.Rule, root string) string {
 	tmpl := cfg.LayoutFor(rule.Host)
 	rendered := placeholderPattern.ReplaceAllStringFunc(tmpl, func(m string) string {
 		name := placeholderPattern.FindStringSubmatch(m)[1]
@@ -246,7 +252,87 @@ func renderGitdirGlob(cfg config.Config, rule config.Rule) string {
 	})
 	// git reads a backslash in a gitdir pattern as an escape, so the
 	// pattern always uses forward slashes, a drive letter path included.
-	return filepath.ToSlash(filepath.Join(cfg.Root, rendered)) + "/**"
+	return filepath.ToSlash(filepath.Join(root, rendered)) + "/**"
+}
+
+// GitdirRoots returns the roots a gitdir condition is rendered for: root as
+// configured, and, when root reaches its directory through a symlink, the
+// path with every symlink resolved as well.
+//
+// Both are needed. Verified against git 2.54.0: git matches a gitdir
+// pattern against the path it sees for the repository, which is the
+// resolved path when the process starts in the real directory, and the
+// path through the link when the shell's $PWD names it, so a pattern for
+// one form never matches a repository entered through the other. (On
+// Windows the CI run of this package's test shows git matching the
+// resolved path either way; the resolved block is the one that counts
+// there.) A root
+// on another volume linked back into the home directory is the usual
+// case, and so is /tmp on macOS.
+//
+// The resolved form is found by resolving the longest existing leading
+// part of root, so a root that does not exist yet still resolves its
+// symlinked parents. This reads the file system. "gitcd apply" and
+// "gitcd doctor" both render through Render, so they always agree.
+//
+// The resolved path is a second root only when config.ValidateRoot accepts
+// it, the same check the configured root passed: a link target holding a
+// quote or a glob character would break the include file or match
+// repositories gitcd never placed. RootResolution reports why one is left
+// out.
+func GitdirRoots(root string) []string {
+	resolved, err := RootResolution(root)
+	if resolved == "" || err != nil {
+		return []string{root}
+	}
+	return []string{root, resolved}
+}
+
+// RootResolution returns the root with its symlinks resolved when that
+// differs from root, and "" when it does not, root being relative or empty
+// included: only an absolute root is resolved. A resolved path that
+// config.ValidateRoot refuses is returned together with that error, so a
+// caller can name the path and the reason; GitdirRoots never renders it.
+//
+// The comparison is on the cleaned path, so a trailing slash is no
+// difference. On Windows it also ignores case, which a junction or a
+// drive letter can change without naming another directory. An 8.3 short
+// name resolved to its long form is not detected as the same path.
+func RootResolution(root string) (string, error) {
+	if !filepath.IsAbs(root) {
+		return "", nil
+	}
+	resolved := ResolveRoot(root)
+	clean := filepath.Clean(root)
+	if resolved == clean || (runtime.GOOS == "windows" && strings.EqualFold(resolved, clean)) {
+		return "", nil
+	}
+	if err := config.ValidateRoot(resolved); err != nil {
+		return resolved, fmt.Errorf("gitconfig: resolved root: %w", err)
+	}
+	return resolved, nil
+}
+
+// ResolveRoot returns root with every symlink along it resolved, or root
+// itself when nothing can be resolved. A part of root that does not exist
+// is kept as written, after the resolved part that does.
+func ResolveRoot(root string) string {
+	rest := ""
+	for dir := filepath.Clean(root); ; {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return root
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return root
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+	}
 }
 
 // azureDevOpsHost is the canonical host name Azure DevOps rules are

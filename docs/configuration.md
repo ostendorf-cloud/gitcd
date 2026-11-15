@@ -41,6 +41,36 @@ against the loading user's home directory; any other value is used as written.
 root: ~/Code
 ```
 
+### A root behind a symlink
+
+`root` may be a symlink, or sit below one, for example a code directory moved to another volume
+and linked back. git matches a `gitdir` condition against the path it sees for a repository. On
+Linux and macOS that is the resolved path when a command starts in the real directory, and the
+path through the link when the shell's working directory names it, so a condition for one form
+never matches the other. On Windows git matches the resolved path whichever way the directory was
+entered, so the resolved condition is the one that counts there.
+
+`gitcd apply` therefore renders every rule's `gitdir` condition for `root` as written and, when
+resolving the symlinks in `root` gives a different path, a second one for the resolved path.
+Both include the same profile file. A part of `root` that does not exist yet stays as written
+after the resolved part that does.
+
+The resolved path has to pass the same check `root` does: no glob character, quote or control
+character, no `.` or `..` segment. A link target such as `a"b` or `[l]` would break the include
+file or match something else, so no condition is rendered for it. The rules then do not apply to
+a repository entered through the real path, and on Windows not to any repository under that
+root. `gitcd apply` then warns on stderr and still writes
+the files. Rename the target or point `root` at the real path.
+
+`gitcd doctor` reports `root-symlink` when `root` reaches its directory through a symlink, in
+either of two cases:
+
+- The include file on disk has no condition for the resolved path. `gitcd apply` or
+  `gitcd doctor --fix` renders it.
+- The resolved path cannot be rendered, as above. This one is not fixable by a re-render.
+
+Symlinks below the repository level, inside a repository's own directory tree, are not handled.
+
 ## `layout.default`
 
 The path template applied to a host with no `layout` key of its own, and the fallback a host's

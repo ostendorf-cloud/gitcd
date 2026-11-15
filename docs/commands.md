@@ -424,7 +424,7 @@ case of, a missing or stale managed file, and a global git identity key, which
   always, `findings` when any finding remains outstanding, and `fixed` when `--fix` repaired
   something. Each entry in either list carries:
   - `kind`: the finding class, such as `identity-drift`, `path-mismatch`,
-    `path-case-mismatch`, `managed-file-missing`, `managed-file-stale` or
+    `path-case-mismatch`, `managed-file-missing`, `managed-file-stale`, `root-symlink` or
     `global-identity-key`.
   - `repo`: the repository's name, `/` separated relative to `root`. Omitted for a finding tied
     to no single repository, a managed file or a global identity key.
