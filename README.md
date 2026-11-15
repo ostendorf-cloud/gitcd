@@ -130,13 +130,38 @@ The first is what the key does. These are families, not a list, and the subsecti
 decides a match, so `diff.command` and `diff.<driver>.command` are the same setting to the gate:
 
 - a key name ending in `askPass`, `cmd`, `command`, `driver`, `editor`, `external`, `hook`,
-  `hooksPath`, `httpd`, `pager`, `process`, `program`, `proxy`, `smtpServer`, `target`,
-  `templateDir`, `textconv`, `tunnel` or `variant`, under any section
-- the key names `allow`, `bareRepository`, `directory`, `fsmonitor`, `helper`, `insteadOf`,
-  `protectHFS`, `protectNTFS`, `pushInsteadOf`, `sharedRepository` and `symlinks`, under any
-  section
-- `clean`, `smudge` and `process` under `filter`, and `path` under `difftool` and `mergetool`
-- every key under `alias`, `pager` and `url`
+  `httpd`, `pager`, `path`, `process`, `program`, `proxy`, `smtpServer`, `target`,
+  `templateDir`, `textconv`, `tunnel` or `variant`, under any section. Five `*path` keys name
+  no path git resolves and are excepted: `core.quotePath`, `credential.useHttpPath`,
+  `advice.updateSparsePath`, `fsck.gitmodulesPath` and `receive.gitmodulesPath`
+- the key names `browser`, `fsmonitor`, `helper`, `insteadOf`, `pushInsteadOf` and `viewer`,
+  under any section
+- `clean`, `smudge` and `process` under `filter`
+- every key under `alias`, `include`, `includeIf`, `pager` and `url`
+
+`include` and `includeIf` are whole sections because their value makes git read configuration
+from somewhere else, so one of them would hand every key in that file to git with no gate at
+all. They are the only two keys in git that do that.
+
+A second class is restricted for a different reason: a key whose value decides whether git
+verifies something, where it gets the material to verify with, or what it writes to the
+filesystem. None of them runs a program, and the reason is the same as for the `core`
+protections — a profile is applied automatically, per remote, to a repository whose contents
+came from that remote, so the mechanism that decides who the commit is from should not also
+decide what git trusts. It covers `core.protectHFS`, `core.protectNTFS`,
+`core.sharedRepository`, `core.symlinks`, `safe.directory`, `safe.bareRepository`,
+`protocol.allow`, `credential.protectProtocol`, `credential.sanitizePrompt`,
+`transfer.credentialsInUrl`, `transfer.fsckObjects`, `fetch.fsckObjects`,
+`receive.fsckObjects`, `gpg.revocationFile`, `gpg.minTrustLevel`, `submodule.<name>.update`
+and seventeen `http.*` keys covering TLS verification, client certificates, cookies, extra
+headers and redirects.
+
+A third class is deliberately **not** restricted: a key naming a file git reads as data.
+`core.attributesFile`, `core.excludesFile`, `gpg.ssh.allowedSignersFile`, `mailmap.file`,
+`diff.orderFile`, `blame.ignoreRevsFile` and `format.signatureFile` all name a file whose
+contents git interprets, and none can cause execution or grant trust on its own: an attributes
+file can name a filter or a diff driver, but only by a name some config key this gate already
+sees has to define.
 
 A match is set aside only in `advice`, `color` and `column`, the sections where git resolves no
 key's value to a program or a path, so a match there is a collision of spelling:

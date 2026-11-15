@@ -85,6 +85,41 @@ func TestUnsafeKeyReason_RestrictsWhatItSaysItDoes(t *testing.T) {
 		{"url.gh.insteadOf", "https://github.com/"},
 		{"url.gh.pushInsteadOf", "https://github.com/"},
 		{"trace2.perfTarget", "/tmp/trace"},
+		// Keys whose value makes git read configuration from elsewhere,
+		// which hands every key in that file to git ungated.
+		{"include.path", "/tmp/pulled-in.inc"},
+		{"includeIf.path", "/tmp/pulled-in.inc"},
+		// A program git runs, named or selected.
+		{"browser.firefox.path", "/usr/local/bin/ff"},
+		{"man.viewer.path", "/usr/local/bin/man"},
+		{"instaweb.modulePath", "/usr/lib/apache2"},
+		{"web.browser", "firefox"},
+		{"help.browser", "firefox"},
+		{"instaweb.browser", "firefox"},
+		{"man.viewer", "man"},
+		// Whether git verifies, what it verifies with, and what it
+		// writes to the filesystem.
+		{"http.sslVerify", "false"},
+		{"http.sslCAInfo", "/tmp/ca.pem"},
+		{"http.sslCAPath", "/tmp/ca"},
+		{"http.sslCert", "/tmp/client.pem"},
+		{"http.sslKey", "/tmp/client.key"},
+		{"http.cookieFile", "/tmp/cookies"},
+		{"http.saveCookies", "true"},
+		{"http.extraHeader", "Authorization: Basic Zm9v"},
+		{"http.followRedirects", "always"},
+		{"http.pinnedPubkey", "sha256//x"},
+		{"credential.protectProtocol", "false"},
+		{"credential.sanitizePrompt", "false"},
+		{"transfer.credentialsInUrl", "allow"},
+		{"transfer.fsckObjects", "false"},
+		{"fetch.fsckObjects", "false"},
+		{"receive.fsckObjects", "false"},
+		{"gpg.revocationFile", "/tmp/revoked"},
+		{"gpg.minTrustLevel", "undefined"},
+		// A form git documents as a custom command, and refuses to
+		// propagate out of .gitmodules itself.
+		{"submodule.lib.update", "!/bin/sh"},
 		// A key no documented git setting matches, whatever it is called.
 		{"core.somethingGitAddedLater", "/usr/local/bin/thing"},
 		{"madeup.section.key", "value"},
@@ -155,6 +190,21 @@ func TestUnsafeKeyReason_RestrictsWhatItSaysItDoes(t *testing.T) {
 		{"protocol.version", "2"},
 		{"credential.useHttpPath", "true"},
 		{"trace2.eventBrief", "true"},
+		// The third category: a file git reads as data. None can cause
+		// execution or grant trust on its own, so each stays allowed
+		// deliberately, and this is where that decision is pinned.
+		{"core.attributesFile", "/home/simon/.gitattributes"},
+		{"core.excludesFile", "/home/simon/.gitignore"},
+		{"gpg.ssh.allowedSignersFile", "/home/simon/.signers"},
+		{"mailmap.file", "/home/simon/.mailmap"},
+		{"diff.orderFile", "/home/simon/.diff-order"},
+		{"blame.ignoreRevsFile", "/home/simon/.git-blame-ignore-revs"},
+		{"format.signatureFile", "/home/simon/.signature"},
+		// Keys ending in "path" that name no path git resolves.
+		{"core.quotePath", "false"},
+		{"credential.useHttpPath", "true"},
+		{"fsck.gitmodulesPath", "warn"},
+		{"receive.gitmodulesPath", "warn"},
 		// Ordinary preferences.
 		{"init.defaultBranch", "main"},
 		{"pull.rebase", "true"},
@@ -171,6 +221,52 @@ func TestUnsafeKeyReason_RestrictsWhatItSaysItDoes(t *testing.T) {
 			t.Parallel()
 			if why, ok := config.UnsafeKeyReason(tt.key, tt.value); ok {
 				t.Fatalf("UnsafeKeyReason(%q, %q) = %q, %v, want it allowed", tt.key, tt.value, why, ok)
+			}
+		})
+	}
+}
+
+// TestUnsafeKeyReason_RefusesAnIncludeForBeingAnInclude pins which rule
+// refuses an include, not only that one does.
+//
+// Both spellings stay refused with the include rule deleted: "path" is
+// a suffix family, and a real condition carries characters the
+// subsection class rejects before the gate is reached at all. So
+// "is it refused" tells the rules apart, and the stated reason is what
+// does. The other two reasons are asserted beside it, so a reason that
+// matched everything would fail the test rather than pass it.
+func TestUnsafeKeyReason_RefusesAnIncludeForBeingAnInclude(t *testing.T) {
+	t.Parallel()
+
+	const (
+		includeReason = "makes git read configuration from a file no gate has seen"
+		sectionReason = "sets a command git runs, or rewrites the URL git contacts"
+		suffixReason  = "names a command git runs, or a path git resolves one from"
+	)
+
+	for _, tt := range []struct{ name, key, value, want string }{
+		{"an unconditional include", "include.path", "/home/simon/.gitcd/work.inc", includeReason},
+		{
+			"a conditional include carrying its condition",
+			"includeIf.gitdir:~/Code/acme/.path", "/home/simon/.gitcd/acme.inc", includeReason,
+		},
+		{"a conditional include without a condition", "includeIf.path", "/home/simon/.gitcd/acme.inc", includeReason},
+		{"an include spelled in upper case", "INCLUDE.PATH", "/home/simon/.gitcd/work.inc", includeReason},
+		{
+			"a conditional include spelled in lower case",
+			"includeif.gitdir:~/Code/acme/.path", "/home/simon/.gitcd/acme.inc", includeReason,
+		},
+		{"an alias, which a restricted section owns", "alias.ci", "!touch /tmp/marker", sectionReason},
+		{"a hooks path, which the suffix family owns", "core.hooksPath", "/home/simon/.githooks", suffixReason},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			why, ok := config.UnsafeKeyReason(tt.key, tt.value)
+			if !ok {
+				t.Fatalf("UnsafeKeyReason(%q, %q) allowed it, want it restricted", tt.key, tt.value)
+			}
+			if why != tt.want {
+				t.Errorf("UnsafeKeyReason(%q, %q) = %q, want %q", tt.key, tt.value, why, tt.want)
 			}
 		})
 	}

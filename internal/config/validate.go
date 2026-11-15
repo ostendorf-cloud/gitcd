@@ -67,9 +67,9 @@ var unsafeNameSuffixes = []string{
 	"editor",
 	"external",
 	"hook",
-	"hookspath",
 	"httpd",
 	"pager",
+	"path",
 	"process",
 	"program",
 	"proxy",
@@ -81,54 +81,61 @@ var unsafeNameSuffixes = []string{
 	"variant",
 }
 
-// unsafeExactNames are final names that denote the same thing but are
-// not composed of a recognisable ending.
+// unsafeExactNames are final names that denote a command git runs, in
+// whatever section they appear, but are not composed of a recognisable
+// ending.
 //
 // "helper" is here rather than the whole "credential" section: it is the
 // only key in that section whose value git resolves to a program, and
 // the rest, "credential.username" and "credential.useHttpPath" among
 // them, are plain settings.
 //
-// The four protection names are a scope decision rather than a command.
-// None of them runs anything: "core.protectNTFS" and "core.protectHFS"
-// refuse to check out a path a crafted tree could use to write into
-// ".git" on those filesystems, "core.sharedRepository" sets the mode of
-// what git creates, and "core.symlinks" decides whether a symlink in a
-// tree becomes one on disk. A profile may not weaken any of them,
-// because a profile is applied automatically, per remote, to a
-// repository whose contents came from that remote: the setting that
-// decides what git will write to the filesystem should not be chosen by
-// the same mechanism that decides who the commit is from. Setting one is
-// still possible, by naming it, which is the point.
+// "browser" and "viewer" are selectors: they do not hold a program but
+// name which one git runs, resolved through "browser.<tool>.path" or
+// PATH, so "web.browser", "help.browser", "instaweb.browser" and
+// "man.viewer" each decide a command as surely as a key holding its
+// path.
 var unsafeExactNames = []string{
-	"allow",
-	"barerepository",
-	"directory",
+	"browser",
 	"fsmonitor",
 	"helper",
 	"insteadof",
-	"protecthfs",
-	"protectntfs",
 	"pushinsteadof",
-	"sharedrepository",
-	"symlinks",
+	"viewer",
 }
 
 // unsafeSections are sections in which every key git documents defines a
-// command or rewrites the URL git contacts. "alias" and "pager" hold
-// nothing but command definitions, keyed by a subsection the user
-// invents, and "url" holds only the two rewriting keys.
+// command, rewrites the URL git contacts, or reads configuration from
+// elsewhere. "alias" and "pager" hold nothing but command definitions,
+// keyed by a subsection the user invents, and "url" holds only the two
+// rewriting keys.
 //
 // A section is not used where only some of its keys qualify.
-// "credential", "difftool", "mergetool", "protocol", "safe" and "trace2"
-// each hold one or two keys git resolves to a program, a path or a trust
-// decision, beside plain preferences like "credential.useHttpPath",
-// "mergetool.prompt", "protocol.version" and "trace2.eventBrief". The
-// keys that qualify are reached by name instead: "helper", "cmd",
-// "path", "allow", "directory", "bareRepository" and the "target"
-// ending.
+// "credential", "difftool", "mergetool", "protocol", "safe", "trace2"
+// and "http" each hold keys that qualify beside plain preferences like
+// "credential.useHttpPath", "mergetool.prompt", "protocol.version",
+// "trace2.eventBrief" and "http.postBuffer", so the keys that qualify
+// are reached by name or by section and name instead.
+//
+// "include" and "includeIf" are whole sections for a reason worth
+// stating: their value makes git read configuration from somewhere
+// else, so a single one of them hands every other key in this file to a
+// file the gate never saw. They are the only two keys in git that do
+// that. The ones that come closest and are not the same thing:
+// "init.templateDir", which seeds a new repository from a directory
+// that may hold a config file, is restricted by name already;
+// "core.attributesFile" can name a filter or a diff driver, but only by
+// a name that has to be defined by a config key this gate sees.
+//
+// "includeIf" is named here rather than left to the subsection class,
+// which happens to reject the ":" and "/" every real condition carries.
+// A guard that works because a different rule rejects the spelling is
+// not a guard: the class could be widened for an unrelated reason and
+// nothing here would notice.
 var unsafeSections = []string{
 	"alias",
+	"include",
+	"includeif",
 	"pager",
 	"url",
 }
@@ -136,19 +143,72 @@ var unsafeSections = []string{
 // unsafeSectionNames are final names restricted only under one section,
 // because the same name is an ordinary setting elsewhere. A filter's
 // "clean" and "smudge" are the two halves of a content filter git runs;
-// "column.clean" is which columns "git clean -i" prints. A tool's "path"
-// is the program git runs for it; "core.quotePath" and
-// "credential.useHttpPath" are booleans that merely end the same way.
+// "column.clean" is which columns "git clean -i" prints.
 //
 // "process" under "filter" decides nothing today: git does not enumerate
 // "filter.<driver>.process", so the unfamiliar key rule reaches it
 // first. It stays because that is a property of the generated list
 // rather than of the key, and the day the list carries it, this is the
 // rule that has to be there.
+// The entries below beyond "filter" are the second category: a key
+// whose value decides whether git verifies something, where it gets the
+// material to verify with, or what it writes to the filesystem. None of
+// them runs a program, so the first category does not describe them,
+// and the reason to restrict them is the same as for the four "core"
+// protections: a profile is applied automatically, per remote, to a
+// repository whose contents came from that remote, so the mechanism
+// that decides who the commit is from should not also decide what git
+// trusts. Each list is every key in that section which qualifies,
+// taken from the generated key list rather than recalled.
+//
+// A third category is deliberately not restricted: a key naming a file
+// git reads as data. "core.attributesFile", "core.excludesFile",
+// "gpg.ssh.allowedSignersFile", "mailmap.file", "diff.orderFile",
+// "blame.ignoreRevsFile" and "format.signatureFile" all name a file
+// whose contents git interprets, none of which can cause execution or
+// grant trust on its own: an attributes file can name a filter or a
+// diff driver, but only by a name some config key this gate already
+// sees has to define. "http.cookieFile" and "gpg.revocationFile" are
+// not in this category, since one holds session credentials and the
+// other decides which signatures still count.
 var unsafeSectionNames = map[string][]string{
-	"difftool":  {"path"},
-	"filter":    {"clean", "process", "smudge"},
-	"mergetool": {"path"},
+	"filter": {"clean", "process", "smudge"},
+	"core":   {"protecthfs", "protectntfs", "sharedrepository", "symlinks"},
+	"credential": {
+		"protectprotocol",
+		"sanitizeprompt",
+	},
+	"fetch":   {"fsckobjects"},
+	"gpg":     {"mintrustlevel", "revocationfile"},
+	"receive": {"fsckobjects"},
+	"http": {
+		"cookiefile",
+		"delegation",
+		"emptyauth",
+		"extraheader",
+		"followredirects",
+		"pinnedpubkey",
+		"proactiveauth",
+		"proxysslcainfo",
+		"proxysslcert",
+		"proxysslkey",
+		"savecookies",
+		"schannelcheckrevoke",
+		"schannelusesslcainfo",
+		"sslcainfo",
+		"sslcert",
+		"sslkey",
+		"sslverify",
+	},
+	"protocol": {"allow"},
+	"safe":     {"barerepository", "directory"},
+	// git documents a form of "submodule.<name>.update" that names a
+	// custom command, and says it is not copied out of ".gitmodules" for
+	// safety. A profile is a weaker claim to authority than a file in
+	// the repository, so if git will not propagate it, gitcd will not
+	// write it either.
+	"submodule": {"update"},
+	"transfer":  {"credentialsinurl", "fsckobjects"},
 }
 
 // inertSections are the sections in which git resolves no key's value to
@@ -166,22 +226,30 @@ var unsafeSectionNames = map[string][]string{
 // only reaches the sections where no key is resolved at all.
 //
 // Each section here was checked against the generated key list rather
-// than recalled: the only names in them that any family rule matches are
-// "advice.ignoredHook", "advice.updateSparsePath",
+// than recalled: the only names in them that any family rule matches
+// are "advice.ignoredHook", "advice.updateSparsePath",
 // "advice.waitingForEditor" and "color.pager", every one a switch that
-// names nothing.
+// names nothing. "advice.updateSparsePath" is also in
+// pathNameExceptions, so it is set aside twice over; the entry there
+// carries it for the sections that are not inert.
 var inertSections = []string{"advice", "color", "column"}
 
 // extraKnownGitKeys are keys git documents in git-config(1) but does not
 // print from "git help -c", so the generated list cannot carry them and
 // the unfamiliar key rule would refuse a setting git itself describes.
 //
-// Each entry is one key, and the comment beside it says where git
-// documents it, so the list can be checked rather than believed. It
-// stays honest two ways: it is only ever a key git documents, never a
-// convenience, and TestExtraKnownGitKeys asserts every entry is still
-// absent from the generated list, so an entry git starts enumerating
-// fails the build instead of sitting here as a quiet duplicate.
+// Two things about this list are enforced, and one is not.
+// TestExtraKnownGitKeys asserts every entry is still absent from the
+// generated list, so an entry git starts enumerating fails the build
+// rather than sitting here as a quiet duplicate, and that no entry is
+// one the family rules restrict, so the list can never be the route by
+// which something dangerous becomes allowed.
+//
+// That each entry is a key git actually documents is not enforced and
+// cannot be from here: nothing in the test environment can be asked
+// whether git-config(1) describes a name. It is a review requirement
+// instead. Every entry carries the citation beside it, and a reviewer
+// checks the citation; an entry without one does not belong.
 //
 // Nothing restricted belongs here. An entry only ever moves a key from
 // "git does not document this" to the family rules, which then decide
@@ -258,13 +326,15 @@ func UnsafeKeyReason(key, value string) (string, bool) {
 	// one is the one a person can act on.
 	if !contains(inertSections, section) {
 		switch {
+		case section == "include" || section == "includeif":
+			return "makes git read configuration from a file no gate has seen", true
 		case contains(unsafeSections, section):
 			return "sets a command git runs, or rewrites the URL git contacts", true
 		case contains(unsafeSectionNames[section], name):
 			return "names a program git runs for this " + section, true
 		case contains(unsafeExactNames, name):
 			return "decides what git trusts, writes or resolves something from", true
-		case hasUnsafeSuffix(name):
+		case hasUnsafeSuffix(section, name):
 			return "names a command git runs, or a path git resolves one from", true
 		}
 	}
@@ -294,12 +364,36 @@ func keyCanBeRestricted(key string) bool {
 		contains(unsafeSections, section) ||
 		contains(unsafeSectionNames[section], name) ||
 		contains(unsafeExactNames, name) ||
-		hasUnsafeSuffix(name)
+		hasUnsafeSuffix(section, name)
+}
+
+// pathNameExceptions are the keys ending in "path" whose value is not a
+// path git resolves anything from. Every other "*path" key in git names
+// a program, a configuration file, a CA bundle or a module directory,
+// so the suffix is the family and these five are the exceptions,
+// checked against the generated list rather than recalled:
+// "core.quotePath", "credential.useHttpPath" and
+// "advice.updateSparsePath" are booleans, and the two "gitmodulesPath"
+// keys set how loudly fsck complains about one.
+//
+// Naming the exceptions rather than the family keeps the safe direction
+// the default: a "*path" key git adds later is restricted until someone
+// looks at it, where a list of program-path sections would have let it
+// through on the next regeneration of the key list.
+var pathNameExceptions = []string{
+	"advice.updatesparsepath",
+	"core.quotepath",
+	"credential.usehttppath",
+	"fsck.gitmodulespath",
+	"receive.gitmodulespath",
 }
 
 // hasUnsafeSuffix reports whether name, already lowercased, ends in one
-// of unsafeNameSuffixes.
-func hasUnsafeSuffix(name string) bool {
+// of unsafeNameSuffixes, for the key section.name.
+func hasUnsafeSuffix(section, name string) bool {
+	if contains(pathNameExceptions, section+"."+name) {
+		return false
+	}
 	for _, suffix := range unsafeNameSuffixes {
 		if strings.HasSuffix(name, suffix) {
 			return true
