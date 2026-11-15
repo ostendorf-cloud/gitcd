@@ -48,7 +48,9 @@ const urlBoundary = " \t\r\n'\"<>()[]{},;="
 // "ssh://git@host/x", is left alone: the user name there names the account,
 // not a secret. The userinfo is percent decoded before that decision, so
 // "user%3aSECRET" counts as a password. The scp style "git@host:path"
-// carries no scheme and is left alone for the same reason.
+// carries no scheme and is left alone for the same reason. The second and
+// last exemption is the Azure DevOps clone URL whose user is the
+// organisation, see isAzureOrganisationUser.
 func Redact(s string) string {
 	var locs [][]int
 	for _, loc := range schemePattern.FindAllStringIndex(s, -1) {
@@ -80,7 +82,11 @@ func Redact(s string) string {
 			continue
 		}
 		scheme := s[loc[0] : loc[1]-len("://")]
-		if strings.EqualFold(scheme, "ssh") && isPlainUser(s[start:start+at]) {
+		userinfo := s[start : start+at]
+		if strings.EqualFold(scheme, "ssh") && isPlainUser(userinfo) {
+			continue
+		}
+		if isAzureOrganisationUser(scheme, userinfo, s[start+at+1:end]) {
 			continue
 		}
 		b.WriteString(s[pos:loc[0]])
@@ -89,6 +95,44 @@ func Redact(s string) string {
 	}
 	b.WriteString(s[pos:])
 	return b.String()
+}
+
+// isAzureOrganisationUser reports whether "scheme://userinfo@rest" is the
+// clone URL Azure DevOps itself hands out, "https://ORG@dev.azure.com/ORG/...",
+// whose user is the organisation and no secret. It is the one exemption from
+// redaction beside a plain ssh user, and the only place that decides it:
+// Redact calls it, and the withholding of git's output asks Redact, so the
+// two cannot disagree. All of these must hold, else the userinfo stays
+// redacted:
+//   - the scheme is https and the host is exactly dev.azure.com, no port
+//   - the userinfo has no password: it is a plain user name once percent
+//     decoded
+//   - the first path segment is there and equals the decoded user, ignoring
+//     case
+//
+// rest is the text after the "@", up to the end of the region Redact looks
+// at. A token in the user slot passes only if the path repeats it as its
+// first segment, where it is visible in the URL anyway.
+func isAzureOrganisationUser(scheme, userinfo, rest string) bool {
+	if !strings.EqualFold(scheme, "https") {
+		return false
+	}
+	user, err := url.PathUnescape(userinfo)
+	if err != nil || !plainUserPattern.MatchString(user) {
+		return false
+	}
+	host, path, ok := strings.Cut(rest, "/")
+	if !ok || !strings.EqualFold(host, azureHost) {
+		return false
+	}
+	// The organisation segment ends at the next separator or at any
+	// character that cannot be part of a URL.
+	org, _, _ := strings.Cut(path, "/")
+	if i := strings.IndexAny(org, urlBoundary+"?#"); i >= 0 {
+		org = org[:i]
+	}
+	org, err = url.PathUnescape(org)
+	return err == nil && org != "" && strings.EqualFold(user, org)
 }
 
 // isPlainUser reports whether userinfo, once percent decoded, is a plain

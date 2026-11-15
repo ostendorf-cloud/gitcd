@@ -335,28 +335,105 @@ func TestClone_WithACredentialStreamsNothingFromGit(t *testing.T) {
 	}
 }
 
-// TestClone_AzureDevOpsOrganisationUserFailsClosed clones the Azure DevOps
-// HTTPS form, whose URL user is the organisation. gitcd cannot tell it from
-// a token as a user name, so git's progress is not streamed and its output
-// is withheld; the URL in the error shows "***" for the user.
-func TestClone_AzureDevOpsOrganisationUserFailsClosed(t *testing.T) {
-	setupGitEnv(t)
+// TestClone_AzureDevOpsUserinfo clones the Azure DevOps HTTPS forms. Git's
+// output is streamed and kept only for the documented form, whose user is
+// the organisation. Every form with a token withholds it and shows "***".
+func TestClone_AzureDevOpsUserinfo(t *testing.T) {
+	const token = "TOKEN-PLACEHOLDER-123"
+	tests := []struct {
+		name         string
+		url          string
+		wantShown    string
+		wantWithheld bool
+	}{
+		{
+			name:      "documented form",
+			url:       "https://ORG@dev.azure.com/ORG/PROJECT/_git/REPO",
+			wantShown: "https://ORG@dev.azure.com/ORG/PROJECT/_git/REPO",
+		},
+		{
+			name:         "user and token",
+			url:          "https://USER:" + token + "@dev.azure.com/ORG/PROJECT/_git/REPO",
+			wantShown:    "https://***@dev.azure.com/ORG/PROJECT/_git/REPO",
+			wantWithheld: true,
+		},
+		{
+			name:         "token in the user slot",
+			url:          "https://" + token + "@dev.azure.com/ORG/PROJECT/_git/REPO",
+			wantShown:    "https://***@dev.azure.com/ORG/PROJECT/_git/REPO",
+			wantWithheld: true,
+		},
+		{
+			name:         "empty user and token",
+			url:          "https://:" + token + "@dev.azure.com/ORG/PROJECT/_git/REPO",
+			wantShown:    "https://***@dev.azure.com/ORG/PROJECT/_git/REPO",
+			wantWithheld: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupGitEnv(t)
 
-	missing := filepath.Join(t.TempDir(), "missing")
-	remoteURL := "https://ORG@dev.azure.com/ORG/PROJECT/_git/REPO"
-	// Redirects the URL to a path that does not exist, so no network is used.
-	config := map[string]string{"url.file://" + missing + ".insteadOf": remoteURL}
-	var progress bytes.Buffer
-	err := git.CloneWithConfig(context.Background(), remoteURL, filepath.Join(t.TempDir(), "dest"), config, &progress)
-	if err == nil {
-		t.Fatal("CloneWithConfig() succeeded, want a failure")
+			// Redirects the URL to a path that does not exist, so no network is used.
+			missing := filepath.Join(t.TempDir(), "missing")
+			runGit := exec.CommandContext(context.Background(), "git", "config", "--global", "url."+testenv.FileURL(missing)+".insteadOf", tt.url)
+			if out, err := runGit.CombinedOutput(); err != nil {
+				t.Fatalf("git config: %v: %s", err, out)
+			}
+			var progress bytes.Buffer
+			err := git.Clone(context.Background(), tt.url, filepath.Join(t.TempDir(), "dest"), &progress)
+			if err == nil {
+				t.Fatal("Clone() succeeded, want a failure")
+			}
+			if tt.wantWithheld && progress.Len() != 0 {
+				t.Errorf("progress = %q, want git's output withheld", progress.String())
+			}
+			if !tt.wantWithheld && progress.Len() == 0 {
+				t.Errorf("progress is empty, want git's output streamed")
+			}
+			if got := strings.Contains(err.Error(), "withheld"); got != tt.wantWithheld {
+				t.Errorf("withheld = %v, want %v, error: %v", got, tt.wantWithheld, err)
+			}
+			if !strings.Contains(err.Error(), tt.wantShown) {
+				t.Errorf("error = %v, want the URL shown as %q", err, tt.wantShown)
+			}
+			if strings.Contains(err.Error(), token) || strings.Contains(progress.String(), token) {
+				t.Errorf("output carries the token, error: %v, progress: %q", err, progress.String())
+			}
+		})
 	}
-	if progress.Len() != 0 {
-		t.Fatalf("progress = %q, want git's output withheld", progress.String())
+}
+
+// TestConfiguredURLsCarryCredential_AzureDevOps covers the configuration a
+// documented form shares with a token: every URL counts, in every scope.
+func TestConfiguredURLsCarryCredential_AzureDevOps(t *testing.T) {
+	t.Parallel()
+
+	const (
+		documented = "https://ORG@dev.azure.com/ORG/PROJECT/_git/REPO"
+		tokenURL   = "https://TOKEN-PLACEHOLDER-123@dev.azure.com/ORG/PROJECT/_git/REPO"
+	)
+	tests := []struct {
+		name   string
+		config string
+		want   bool
+	}{
+		{name: "documented form only", config: "remote.origin.url\n" + documented, want: false},
+		{name: "documented form with a push url of the same kind", config: "remote.origin.url\n" + documented + "\x00remote.origin.pushurl\n" + documented, want: false},
+		{name: "documented form and a token push url", config: "remote.origin.url\n" + documented + "\x00remote.origin.pushurl\n" + tokenURL, want: true},
+		{name: "documented form and another remote with a token", config: "remote.origin.url\n" + documented + "\x00remote.other.url\n" + tokenURL, want: true},
+		{name: "rewrite of the documented form", config: "url.file:///missing.insteadof\n" + documented, want: false},
+		{name: "rewrite to a token url", config: "url." + tokenURL + ".insteadof\nhttps://elsewhere.test/", want: true},
 	}
-	if !strings.Contains(err.Error(), "https://***@dev.azure.com/ORG/PROJECT/_git/REPO") ||
-		!strings.Contains(err.Error(), "withheld") {
-		t.Fatalf("CloneWithConfig() error = %v, want the masked URL and withheld output", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			run := func(...string) ([]byte, error) { return []byte(tt.config + "\x00"), nil }
+			if got := git.ConfiguredURLsCarryCredential(run); got != tt.want {
+				t.Fatalf("ConfiguredURLsCarryCredential() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
