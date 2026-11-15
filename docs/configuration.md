@@ -13,6 +13,25 @@ and regenerates through `gitcd apply`; nothing under it is meant to be edited di
 `gitcd init --move-identity` is the one command that writes into this file on a person's behalf,
 always backing it up first.
 
+The managed directory is private to the user: `gitcd apply` and `gitcd init` create the
+directories `0700` and the profile files and the include file `0600`, since they name
+identities, signing keys and keys that change what git runs.
+
+Which modes change on an existing installation:
+
+- `gitcd apply` tightens every file it writes, the include file and one file per profile, to
+  `0600`, and the managed directory and its `profiles` directory to `0700`. `gitcd init`
+  tightens the managed directory the same way. gitcd owns and regenerates those paths, so no
+  mode a person set on purpose is lost.
+- A file `apply` does not write keeps its mode, for instance a file left behind by a profile
+  that was removed. The `0700` directory still keeps others out of it.
+- A symlink at a path `apply` writes is refused with an error. gitcd does not write through it,
+  so the file it points at is neither changed nor given a new mode. A symlink as the managed
+  directory itself is followed.
+- This configuration file is not changed by either command.
+- On Windows the private modes do not apply: access to the managed directory is governed by the
+  ACLs it inherits from the user profile.
+
 ## `root`
 
 The clone root every rendered path sits under, default `~/Code`. A leading `~` is expanded

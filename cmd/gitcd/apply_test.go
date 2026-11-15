@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +50,176 @@ defaultProfile: private
 	if !strings.Contains(stdout.String(), profilePath) {
 		t.Fatalf("apply stdout = %q, want it to list %s", stdout.String(), profilePath)
 	}
+}
+
+// assertManagedModes checks the mode of the managed directory, its profiles
+// directory and every file gitcd wrote under it.
+func assertManagedModes(t *testing.T, home string) {
+	t.Helper()
+	managedDir := filepath.Join(home, ".config", "gitcd")
+	want := map[string]os.FileMode{
+		managedDir:                                           0o700,
+		filepath.Join(managedDir, "profiles"):                0o700,
+		filepath.Join(managedDir, "includes.gitconfig"):      0o600,
+		filepath.Join(managedDir, "profiles", "a.gitconfig"): 0o600,
+		filepath.Join(managedDir, "profiles", "b.gitconfig"): 0o600,
+	}
+	for path := range want {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+	}
+	t.Run("modes", func(t *testing.T) {
+		skipWithoutUnixModes(t)
+		for path, mode := range want {
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat %s: %v", path, err)
+			}
+			if got := info.Mode().Perm(); got != mode {
+				t.Errorf("mode of %s = %o, want %o", path, got, mode)
+			}
+		}
+	})
+}
+
+const modesConfig = `
+profiles:
+  a:
+    user.email: a@example.test
+  b:
+    user.email: b@example.test
+defaultProfile: a
+`
+
+func TestRunApply_CreatesTheManagedFilesPrivate(t *testing.T) {
+	home := setupEnv(t)
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), modesConfig)
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"apply"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("apply = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	assertManagedModes(t, home)
+}
+
+func TestRunApply_TightensFilesAnEarlierVersionWroteWide(t *testing.T) {
+	home := setupEnv(t)
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), modesConfig)
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"apply"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("apply = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	managedDir := filepath.Join(home, ".config", "gitcd")
+	for path, mode := range map[string]os.FileMode{
+		managedDir:                                           0o755,
+		filepath.Join(managedDir, "profiles"):                0o755,
+		filepath.Join(managedDir, "includes.gitconfig"):      0o644,
+		filepath.Join(managedDir, "profiles", "a.gitconfig"): 0o644,
+		filepath.Join(managedDir, "profiles", "b.gitconfig"): 0o644,
+	} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatalf("chmod %s: %v", path, err)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"apply"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("second apply = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	assertManagedModes(t, home)
+}
+
+func TestWritePrivateFile_RefusesASymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	writeFile(t, target, "keep")
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	link := filepath.Join(dir, "link")
+	symlinkOrSkip(t, target, link)
+	dangling := filepath.Join(dir, "dangling")
+	symlinkOrSkip(t, filepath.Join(dir, "missing"), dangling)
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "link to a file", path: link},
+		{name: "dangling link", path: dangling},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := writePrivateFile(tt.path, []byte("new"))
+			if !errors.Is(err, errSymlinkAtManagedPath) {
+				t.Fatalf("writePrivateFile(%s) error = %v, want errSymlinkAtManagedPath", tt.path, err)
+			}
+		})
+	}
+
+	if got, _ := os.ReadFile(target); string(got) != "keep" {
+		t.Fatalf("target = %q, want it untouched", got)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("the dangling link's target was created")
+	}
+	t.Run("target mode", func(t *testing.T) {
+		skipWithoutUnixModes(t)
+		info, err := os.Stat(target)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if got := info.Mode().Perm(); got != 0o644 {
+			t.Fatalf("target mode = %o, want 644 unchanged", got)
+		}
+	})
+}
+
+func TestRunApply_RefusesASymlinkAtAManagedPath(t *testing.T) {
+	home := setupEnv(t)
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), modesConfig)
+	managedDir := filepath.Join(home, ".config", "gitcd")
+	if err := os.MkdirAll(managedDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	target := filepath.Join(home, "elsewhere.gitconfig")
+	writeFile(t, target, "keep")
+	symlinkOrSkip(t, target, filepath.Join(managedDir, "includes.gitconfig"))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"apply"}, &stdout, &stderr); code == 0 {
+		t.Fatal("apply = 0, want a failure for a symlink at a managed path")
+	}
+	if got, _ := os.ReadFile(target); string(got) != "keep" {
+		t.Fatalf("symlink target = %q, want it untouched", got)
+	}
+}
+
+func TestRunInit_CreatesTheManagedDirectoryPrivate(t *testing.T) {
+	home := setupEnv(t)
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"init"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("init = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	managedDir := filepath.Join(home, ".config", "gitcd")
+	info, err := os.Stat(managedDir)
+	if err != nil {
+		t.Fatalf("stat %s: %v", managedDir, err)
+	}
+	t.Run("mode", func(t *testing.T) {
+		skipWithoutUnixModes(t)
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Fatalf("mode of %s = %o, want 700", managedDir, got)
+		}
+	})
 }
 
 func TestRunApply_DryRunPrintsWithoutWriting(t *testing.T) {

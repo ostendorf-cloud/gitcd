@@ -75,6 +75,11 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gitcd adopt: %v\n", err)
 		return 1
 	}
+	// What the checks below see at oldPath, recorded first so the move can
+	// confirm, right before it happens, that the same directory is still
+	// there. A failure here is read after the repository check, which
+	// words the more useful message for a path that is not a repository.
+	source, sourceErr := captureSource(oldPath)
 	if !git.IsRepository(oldPath) {
 		if _, statErr := os.Stat(oldPath); errors.Is(statErr, os.ErrNotExist) {
 			fmt.Fprintf(stderr, "gitcd adopt: %s does not exist\n", oldPath)
@@ -85,6 +90,10 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintf(stderr, "gitcd adopt: %s is not a git repository\n", oldPath)
+		return 1
+	}
+	if sourceErr != nil {
+		fmt.Fprintf(stderr, "gitcd adopt: read %s: %v\n", oldPath, sourceErr)
 		return 1
 	}
 
@@ -183,7 +192,7 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gitcd adopt: create %s: %v\n", mkdirTarget, err)
 		return 1
 	}
-	if err := os.Rename(oldPath, newPath); err != nil {
+	if err := moveRepository(ctx, oldPath, newPath, source); err != nil {
 		if removeErr := removeCreatedAncestor(createdFrom); removeErr != nil {
 			fmt.Fprintf(
 				stderr, "gitcd adopt: move %s to %s: %v (also failed to remove %s, created for the move: %v)\n",
@@ -198,6 +207,35 @@ func runAdopt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, oldPath)
 	fmt.Fprintln(stdout, newPath)
 	return fixAdoptedConfig(ctx, stderr, cfg, r, newPath)
+}
+
+// moveRepository moves the repository at oldPath to newPath, right after
+// confirming that oldPath still holds what the earlier checks saw: the same
+// directory and ".git" entry as source recorded, and still neither a linked
+// worktree nor the owner of one. The destination is created by the move
+// itself, so a path that exists by then, whatever it is, fails the move
+// instead of being written into or over.
+//
+// Closed: a path substituted between the checks and this call, including
+// during the confirmation prompt, and a destination that appeared after the
+// conflict check. Remaining: the interval between the confirmation here and
+// the rename itself, and any swap of a parent directory in that interval.
+// A path based rename cannot be made atomic with its check without
+// platform specific calls the standard library does not offer, and
+// exploiting the interval needs write access to the same directories as
+// the user running gitcd, which already allows far more than this.
+func moveRepository(ctx context.Context, oldPath, newPath string, source sourceIdentity) error {
+	if err := source.verify(oldPath); err != nil {
+		return err
+	}
+	conflict, err := adoptWorktreeConflict(ctx, oldPath)
+	if err != nil {
+		return err
+	}
+	if conflict != "" {
+		return fmt.Errorf("%w: %s", errSourceChanged, conflict)
+	}
+	return renameNoReplace(oldPath, newPath)
 }
 
 // adoptWorktreeConflict reports why oldPath must refuse to move at all,
@@ -324,8 +362,13 @@ func adoptTargetConflict(ctx context.Context, cfg config.Config, newPath string,
 		return fmt.Sprintf("%s already exists: %v", newPath, err)
 	}
 	existing, err := remote.Parse(existingURL, cfg.AliasMap())
-	if err != nil || existing != want {
-		return fmt.Sprintf("%s already exists with a different remote: %s", newPath, existingURL)
+	if err != nil {
+		// A remote that failed to parse is not printed at all: nothing
+		// says where a credential in it starts.
+		return fmt.Sprintf("%s already exists with a remote gitcd cannot parse", newPath)
+	}
+	if existing != want {
+		return fmt.Sprintf("%s already exists with a different remote: %s", newPath, remote.Redact(existingURL))
 	}
 	return fmt.Sprintf("%s already exists with the same remote: it looks already adopted", newPath)
 }

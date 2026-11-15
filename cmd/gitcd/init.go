@@ -42,6 +42,36 @@ const defaultMovedProfileName = "global"
 // instead keeps whatever mode the file already had; see moveGlobalIdentity.
 const defaultConfigMode = 0o600
 
+// backupNow is the clock a backup name is derived from. It is a variable
+// only so a test can pin the name and plant a file there; nothing else
+// assigns it.
+var backupNow = time.Now
+
+// backupPathFor returns the path a backup of original is written to: the
+// original name plus a UTC timestamp with nanosecond resolution. Two runs
+// get two names, so a second run does not collide with the first. The name
+// is still predictable, which is why writeBackup refuses an existing file.
+func backupPathFor(original string) string {
+	return original + ".gitcd-backup-" + backupNow().UTC().Format("20060102T150405.000000000Z")
+}
+
+// writeBackup creates path with content, mode 0600, and fails with an error
+// wrapping fs.ErrExist when anything already sits there, a file, a
+// directory or a symlink, instead of writing into or through it. A
+// collision is not resolved by picking another name: the caller aborts, so
+// no original file is touched before every backup exists.
+func writeBackup(path string, content []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 // runInit implements "gitcd init". Beyond adding the "include.path" line
 // described below, it first detects every identity key the global git
 // configuration sets directly: "user.useConfigOnly" only stops git from
@@ -125,8 +155,8 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if backupPath != "" || len(content) == 0 {
 			return nil
 		}
-		backupPath = globalPath + ".gitcd-backup-" + time.Now().UTC().Format("20060102T150405Z")
-		if err := os.WriteFile(backupPath, content, 0o600); err != nil {
+		backupPath = backupPathFor(globalPath)
+		if err := writeBackup(backupPath, content); err != nil {
 			backupPath = ""
 			return fmt.Errorf("back up %s: %w", globalPath, err)
 		}
@@ -203,8 +233,10 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	if err := os.MkdirAll(filepath.Dir(includePath), 0o755); err != nil {
-		fmt.Fprintf(stderr, "gitcd init: create %s: %v\n", filepath.Dir(includePath), err)
+	// The managed directory holds identity data, so it is created private
+	// here as well, see writeRenderedFiles.
+	if err := ensurePrivateDir(filepath.Dir(includePath)); err != nil {
+		fmt.Fprintf(stderr, "gitcd init: %v\n", err)
 		return 1
 	}
 	if err := git.ConfigAddGlobal(ctx, "include.path", includePath); err != nil {
@@ -350,9 +382,10 @@ func decideMove(moveIdentity string, stdin io.Reader, stderr io.Writer, found []
 
 // moveGlobalIdentity moves found into profile target: it writes the
 // updated profile into the configuration file config.Path resolves,
-// backing it up first when it already exists, validates that the
-// updated file actually loads, before removing each key from the global
-// git configuration, backing that up through backupGlobalConfig first.
+// validates that the updated file actually loads, before removing each
+// key from the global git configuration. Both files are backed up, the
+// global one through backupGlobalConfig, before either is touched, and a
+// backup that cannot be created aborts the move.
 // Persisting the new copy before touching the original is deliberate: if
 // the persist step fails, or the persisted copy does not load, the
 // global configuration is never touched at all, and if a later removal
@@ -370,10 +403,17 @@ func moveGlobalIdentity(
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read %s: %w", cfgPath, err)
 	}
+
+	// Both backups are written before either original is touched, so a
+	// backup that cannot be created, an existing file at its path
+	// included, aborts the move with both originals unchanged.
+	if err := backupGlobalConfig(); err != nil {
+		return fmt.Errorf("%w: aborted before changing any file", err)
+	}
 	if len(existingYAML) > 0 {
-		cfgBackupPath := cfgPath + ".gitcd-backup-" + time.Now().UTC().Format("20060102T150405Z")
-		if err := os.WriteFile(cfgBackupPath, existingYAML, 0o600); err != nil {
-			return fmt.Errorf("back up %s: %w", cfgPath, err)
+		cfgBackupPath := backupPathFor(cfgPath)
+		if err := writeBackup(cfgBackupPath, existingYAML); err != nil {
+			return fmt.Errorf("back up %s: %w: aborted before changing any file", cfgPath, err)
 		}
 		fmt.Fprintf(stdout, "backed up %s to %s\n", cfgPath, cfgBackupPath)
 	}
@@ -481,9 +521,6 @@ func moveGlobalIdentity(
 	}
 	fmt.Fprintf(stdout, "moved %s into profile %q in %s\n", describeIdentityKeys(found), target, writeTarget)
 
-	if err := backupGlobalConfig(); err != nil {
-		return err
-	}
 	for _, v := range found {
 		if err := git.ConfigUnsetGlobal(ctx, v.Key); err != nil {
 			return fmt.Errorf("remove %s from %s: %w", v.Key, globalPath, err)

@@ -7,11 +7,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/git"
@@ -276,6 +279,113 @@ func TestRunInit_MoveBacksUpAnExistingGitcdYAMLBeforeEditingIt(t *testing.T) {
 	}
 	if !strings.Contains(string(backupContent), "work@example.test") || strings.Contains(string(backupContent), "[email protected]") {
 		t.Fatalf("backup content = %q, want it to hold the configuration exactly as it was before the move", backupContent)
+	}
+}
+
+func TestRunInit_AnExistingFileAtABackupPathStopsTheMove(t *testing.T) {
+	const yaml = "profiles:\n  work:\n    user.email: work@example.test\nrules:\n  - host: github.com\n    profile: work\n"
+
+	tests := []struct {
+		name string
+		// planted names the original whose backup path gets a file.
+		planted func(home string) string
+	}{
+		{name: "global git configuration backup", planted: globalConfigPath},
+		{name: "gitcd configuration backup", planted: func(home string) string { return filepath.Join(home, ".gitcd.yaml") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := setupEnv(t)
+			globalPath := globalConfigPath(home)
+			cfgPath := filepath.Join(home, ".gitcd.yaml")
+			writeFile(t, cfgPath, yaml)
+
+			fixed := time.Date(2026, 1, 2, 3, 4, 5, 6, time.UTC)
+			orig := backupNow
+			backupNow = func() time.Time { return fixed }
+			t.Cleanup(func() { backupNow = orig })
+
+			plantedBackup := backupPathFor(tt.planted(home))
+			const sentinel = "do not overwrite\n"
+			writeFile(t, plantedBackup, sentinel)
+
+			globalBefore, err := os.ReadFile(globalPath)
+			if err != nil {
+				t.Fatalf("read %s: %v", globalPath, err)
+			}
+
+			var stdout, stderr bytes.Buffer
+			code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
+			if code == 0 {
+				t.Fatal("init --move-identity=yes = 0, want a failure for an existing backup file")
+			}
+
+			if got, _ := os.ReadFile(plantedBackup); string(got) != sentinel {
+				t.Fatalf("the file at the backup path = %q, want it untouched", got)
+			}
+			if got, _ := os.ReadFile(globalPath); string(got) != string(globalBefore) {
+				t.Fatalf("global config changed: %q, want %q", got, globalBefore)
+			}
+			if got, _ := os.ReadFile(cfgPath); string(got) != yaml {
+				t.Fatalf("%s changed: %q, want %q", cfgPath, got, yaml)
+			}
+		})
+	}
+}
+
+func TestWriteBackup_RefusesAnExistingPath(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "file")
+	writeFile(t, existing, "keep")
+	link := filepath.Join(dir, "link")
+	symlinkOrSkip(t, existing, link)
+
+	tests := []struct {
+		name string
+		path string
+		// anyErrorOnWindows accepts any failure on Windows: opening a
+		// directory for writing there fails with "is a directory", not
+		// with fs.ErrExist. The documented behaviour is only that the
+		// backup stops, and nothing is written.
+		anyErrorOnWindows bool
+	}{
+		{name: "regular file", path: existing},
+		{name: "symlink", path: link},
+		{name: "directory", path: dir, anyErrorOnWindows: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("read dir: %v", err)
+			}
+			err = writeBackup(tt.path, []byte("new"))
+			switch {
+			case errors.Is(err, fs.ErrExist):
+			case tt.anyErrorOnWindows && runtime.GOOS == "windows" && err != nil:
+			default:
+				t.Fatalf("writeBackup(%s) error = %v, want fs.ErrExist", tt.path, err)
+			}
+			after, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("read dir: %v", err)
+			}
+			if len(after) != len(before) {
+				t.Fatalf("directory entries changed from %d to %d, want nothing written", len(before), len(after))
+			}
+		})
+	}
+	if got, _ := os.ReadFile(existing); string(got) != "keep" {
+		t.Fatalf("existing file = %q, want it untouched", got)
+	}
+}
+
+func TestBackupPathFor_TwoRunsGetTwoNames(t *testing.T) {
+	first := backupPathFor("/x/.gitconfig")
+	time.Sleep(time.Millisecond)
+	second := backupPathFor("/x/.gitconfig")
+	if first == second {
+		t.Fatalf("two backup paths are both %q, want them to differ", first)
 	}
 }
 

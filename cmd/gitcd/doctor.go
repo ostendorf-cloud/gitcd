@@ -254,6 +254,17 @@ func applyFixes(
 		}
 	}
 
+	// What every repository a case rename will move looks like now, before
+	// any repair runs, so renameCaseOnly can confirm the same directory is
+	// still at that path right before it renames.
+	sources := make(map[string]sourceIdentity)
+	sourceErrs := make(map[string]error)
+	for _, f := range all {
+		if f.Kind == doctor.KindPathCase && !dryRun {
+			sources[f.Path], sourceErrs[f.Path] = captureSource(f.Path)
+		}
+	}
+
 	for _, f := range all {
 		switch {
 		case (f.Kind == doctor.KindManagedFileMissing || f.Kind == doctor.KindManagedFileStale) && managedWritten:
@@ -263,7 +274,12 @@ func applyFixes(
 			fmt.Fprintf(stdout, "would rename %s to %s\n", oldAncestor, newAncestor)
 			outstanding = append(outstanding, f)
 		case f.Kind == doctor.KindPathCase:
-			oldAncestor, newAncestor, moved, err := renameCaseOnly(f.Path, f.WantPath)
+			if err := sourceErrs[f.Path]; err != nil {
+				fmt.Fprintf(stderr, "gitcd doctor: read %s: %v\n", f.Path, err)
+				outstanding = append(outstanding, f)
+				continue
+			}
+			oldAncestor, newAncestor, moved, err := renameCaseOnly(f.Path, f.WantPath, sources[f.Path])
 			if err != nil {
 				fmt.Fprintf(stderr, "gitcd doctor: %v\n", err)
 				outstanding = append(outstanding, f)
@@ -300,7 +316,7 @@ func rerenderManagedFiles(cfg config.Config, home string, logger *slog.Logger, s
 	if err != nil {
 		return err
 	}
-	return writeRenderedFiles(rendered, logger, stdout)
+	return writeRenderedFiles(rendered, gitconfig.Dir(home), logger, stdout)
 }
 
 // renameCaseOnly moves oldPath to newPath, a path differing from it only
@@ -340,7 +356,49 @@ func rerenderManagedFiles(cfg config.Config, home string, logger *slog.Logger, s
 // placed by one call: the caller compares the resulting path against
 // the finding's own WantPath and must not report it fixed until they
 // match, which can take more than one "doctor --fix" run to reach.
-func renameCaseOnly(oldPath, newPath string) (oldAncestor, newAncestor string, moved bool, err error) {
+//
+// expect is what the repository at oldPath looked like when applyFixes
+// started, after the findings were collected. Right before the first rename, oldPath, and so the
+// ancestor on its way, must still resolve to that same directory, and the
+// ancestor must still be a real directory, not a symlink; otherwise the
+// call refuses with an error wrapping errSourceChanged and renames nothing.
+// Both hops create their destination exclusively, so an entry that exists
+// by then fails the rename instead of being written into or over.
+//
+// Remaining, and why that is acceptable: the interval between the
+// confirmation above and the first rename, and between the two renames. A
+// path based rename cannot be tied to its check without platform specific
+// calls the standard library does not offer, and exploiting either interval
+// needs write access to the same directories as the user running gitcd.
+func renameCaseOnly(oldPath, newPath string, expect sourceIdentity) (oldAncestor, newAncestor string, moved bool, err error) {
+	return renameCaseOnlyWith(renameNoReplace, oldPath, newPath, expect)
+}
+
+// errLeftAtTemporaryName is returned when the second rename of a case only
+// rename failed and moving the directory back failed too: the directory
+// is left at Temp. It unwraps to both failures.
+type errLeftAtTemporaryName struct {
+	// Temp is where the directory is now, Old and New the names it was
+	// being moved between.
+	Temp, Old, New string
+	// Err is the failed second rename, RestoreErr the failed move back.
+	Err, RestoreErr error
+}
+
+func (e *errLeftAtTemporaryName) Error() string {
+	return fmt.Sprintf(
+		"rename %s to %s failed: %v; moving it back from the temporary name failed too: %v; the directory is left at %s",
+		e.Old, e.New, e.Err, e.RestoreErr, e.Temp,
+	)
+}
+
+func (e *errLeftAtTemporaryName) Unwrap() []error { return []error{e.Err, e.RestoreErr} }
+
+// renameCaseOnlyWith is renameCaseOnly with the rename itself passed in, so
+// a test can fail one step of it.
+func renameCaseOnlyWith(
+	rename func(src, dst string) error, oldPath, newPath string, expect sourceIdentity,
+) (oldAncestor, newAncestor string, moved bool, err error) {
 	oldAncestor, newAncestor = doctor.FirstDifferingSegment(oldPath, newPath)
 	if oldAncestor == newAncestor {
 		return oldAncestor, newAncestor, false, nil
@@ -349,14 +407,31 @@ func renameCaseOnly(oldPath, newPath string) (oldAncestor, newAncestor string, m
 		return oldAncestor, newAncestor, false, nil
 	}
 
-	tmp := oldAncestor + ".gitcd-doctor-rename-tmp"
-	if err := os.Rename(oldAncestor, tmp); err != nil {
+	if err := expect.verify(oldPath); err != nil {
+		return oldAncestor, newAncestor, false, err
+	}
+	if info, err := os.Lstat(oldAncestor); err != nil {
+		return oldAncestor, newAncestor, false, fmt.Errorf("%w: %s: %w", errSourceChanged, oldAncestor, err)
+	} else if !info.IsDir() {
+		return oldAncestor, newAncestor, false, fmt.Errorf("%w: %s is not a directory", errSourceChanged, oldAncestor)
+	}
+
+	tmp, err := uniqueSiblingName(oldAncestor, "gitcd-doctor-rename-tmp")
+	if err != nil {
+		return oldAncestor, newAncestor, false, err
+	}
+	if err := rename(oldAncestor, tmp); err != nil {
 		return oldAncestor, newAncestor, false, fmt.Errorf("rename %s to a temporary name: %w", oldAncestor, err)
 	}
-	if err := os.Rename(tmp, newAncestor); err != nil {
-		// Best effort restore, so a failed second hop does not leave the
-		// repository sitting at an unexpected temporary name.
-		_ = os.Rename(tmp, oldAncestor)
+	if err := rename(tmp, newAncestor); err != nil {
+		// Move it back, so a failed second hop does not leave the
+		// repository sitting at the temporary name. When that fails too,
+		// the error names where the directory is.
+		if restoreErr := rename(tmp, oldAncestor); restoreErr != nil {
+			return oldAncestor, newAncestor, false, &errLeftAtTemporaryName{
+				Temp: tmp, Old: oldAncestor, New: newAncestor, Err: err, RestoreErr: restoreErr,
+			}
+		}
 		return oldAncestor, newAncestor, false, fmt.Errorf("rename %s to %s: %w", oldAncestor, newAncestor, err)
 	}
 	return oldAncestor, newAncestor, true, nil
