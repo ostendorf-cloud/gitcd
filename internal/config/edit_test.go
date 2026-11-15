@@ -99,7 +99,8 @@ func TestAddProfileKeys(t *testing.T) {
 		// "!!null" scalar node, not a mapping node, so appending the new
 		// profile's key and value to it must not be silently swallowed by
 		// yaml.Marshal the way it was before this fix.
-		existing := "root: /tmp/example/Code\nprofiles:\n"
+		// The root is a temporary directory so it is absolute on Windows too.
+		existing := "root: " + filepath.ToSlash(t.TempDir()) + "\nprofiles:\n"
 
 		out, err := config.AddProfileKeys([]byte(existing), "global", map[string]string{"user.email": "me@example.test"})
 		if err != nil {

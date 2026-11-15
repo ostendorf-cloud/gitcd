@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ostendorf-cloud/gitcd/internal/status"
+	"github.com/ostendorf-cloud/gitcd/internal/testenv"
 )
 
 // setupGitEnv isolates every git invocation in the test from the real
@@ -23,7 +24,7 @@ func setupGitEnv(t *testing.T) {
 	if err := os.WriteFile(globalConfig, []byte("[user]\n\tname = Test User\n\temail = [email protected]\n"), 0o644); err != nil {
 		t.Fatalf("write %s: %v", globalConfig, err)
 	}
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 }

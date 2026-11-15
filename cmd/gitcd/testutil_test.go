@@ -8,8 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/ostendorf-cloud/gitcd/internal/testenv"
 )
 
 // setupEnv isolates every command under test, and every git invocation it
@@ -22,7 +25,7 @@ func setupEnv(t *testing.T) (home string) {
 	home = t.TempDir()
 	globalGitConfig := filepath.Join(home, "gitconfig-global")
 
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("GIT_CONFIG_GLOBAL", globalGitConfig)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
@@ -104,7 +107,13 @@ func resolveGoEnv() []string {
 // test binary itself, such as a shell wrapper's own "command gitcd" call.
 func buildGitcd(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "gitcd")
+	name := "gitcd"
+	if runtime.GOOS == "windows" {
+		// PowerShell and cmd only find an executable that carries an
+		// extension from PATHEXT.
+		name += ".exe"
+	}
+	bin := filepath.Join(t.TempDir(), name)
 	cmd := exec.CommandContext(context.Background(), "go", "build", "-o", bin, ".")
 	cmd.Env = append(os.Environ(), goEnv...)
 	if out, err := cmd.CombinedOutput(); err != nil {

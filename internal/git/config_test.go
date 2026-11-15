@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/ostendorf-cloud/gitcd/internal/git"
+	"github.com/ostendorf-cloud/gitcd/internal/testenv"
 )
 
 // gitOutput runs git with args in dir and returns its trimmed stdout,
@@ -31,7 +32,7 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 func TestGlobalConfigPath(t *testing.T) {
 	t.Run("GIT_CONFIG_GLOBAL wins when set", func(t *testing.T) {
 		home := t.TempDir()
-		t.Setenv("HOME", home)
+		testenv.SetHome(t, home)
 		explicit := filepath.Join(home, "explicit.gitconfig")
 		t.Setenv("GIT_CONFIG_GLOBAL", explicit)
 
@@ -46,7 +47,7 @@ func TestGlobalConfigPath(t *testing.T) {
 
 	t.Run("falls back to the home gitconfig when it exists", func(t *testing.T) {
 		home := t.TempDir()
-		t.Setenv("HOME", home)
+		testenv.SetHome(t, home)
 		t.Setenv("GIT_CONFIG_GLOBAL", "")
 		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 		primary := filepath.Join(home, ".gitconfig")
@@ -65,7 +66,7 @@ func TestGlobalConfigPath(t *testing.T) {
 
 	t.Run("falls back to the xdg path when only it exists", func(t *testing.T) {
 		home := t.TempDir()
-		t.Setenv("HOME", home)
+		testenv.SetHome(t, home)
 		t.Setenv("GIT_CONFIG_GLOBAL", "")
 		xdg := filepath.Join(home, ".config")
 		t.Setenv("XDG_CONFIG_HOME", xdg)
@@ -88,7 +89,7 @@ func TestGlobalConfigPath(t *testing.T) {
 
 	t.Run("defaults to the home gitconfig when neither exists", func(t *testing.T) {
 		home := t.TempDir()
-		t.Setenv("HOME", home)
+		testenv.SetHome(t, home)
 		t.Setenv("GIT_CONFIG_GLOBAL", "")
 		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 
