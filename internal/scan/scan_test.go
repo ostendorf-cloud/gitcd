@@ -225,6 +225,60 @@ func TestWalk_ReportsALinkedWorktreeNestedInsideItsOwnRepository(t *testing.T) {
 	}
 }
 
+// TestWalk_FindsTheWorktreesOfAnUninspectableRepository covers a
+// repository with no remote carrying a linked worktree, placed beside it
+// and nested inside it: both worktrees must be reported, flagged as
+// worktrees, next to the repository's own Err.
+func TestWalk_FindsTheWorktreesOfAnUninspectableRepository(t *testing.T) {
+	tests := []struct {
+		name         string
+		worktreePath func(main string) string
+	}{
+		{"worktree beside the repository", func(main string) string { return main + "-feature" }},
+		{"worktree nested inside the repository", func(main string) string {
+			return filepath.Join(main, ".claude", "worktrees", "feature")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := setupGitEnv(t)
+			root := filepath.Join(home, "Code")
+
+			main := filepath.Join(root, "local-only")
+			if err := os.MkdirAll(main, 0o755); err != nil {
+				t.Fatalf("create %s: %v", main, err)
+			}
+			runGit(t, main, "init", "--initial-branch=main")
+			if err := os.WriteFile(filepath.Join(main, "README.md"), []byte("example\n"), 0o644); err != nil {
+				t.Fatalf("write README.md: %v", err)
+			}
+			runGit(t, main, "add", "README.md")
+			runGit(t, main, "commit", "-m", "add README")
+			worktree := tt.worktreePath(main)
+			runGit(t, main, "worktree", "add", worktree)
+
+			results, err := scan.Walk(context.Background(), root, config.Config{}, filepath.Join(home, ".config", "gitcd"))
+			if err != nil {
+				t.Fatalf("Walk() returned an unexpected error: %v", err)
+			}
+
+			got := make(map[string]scan.Result, len(results))
+			for _, r := range results {
+				got[r.Repo.Path] = r
+			}
+			if len(results) != 2 {
+				t.Fatalf("Walk() paths = %v, want %s and %s", paths(results), main, worktree)
+			}
+			if r, ok := got[main]; !ok || r.Err == nil || r.Repo.IsWorktree {
+				t.Errorf("Walk() result for %s = %+v, want an Err and no worktree flag", main, r)
+			}
+			if r, ok := got[worktree]; !ok || r.Err == nil || !r.Repo.IsWorktree {
+				t.Errorf("Walk() result for %s = %+v, want an Err and the worktree flag", worktree, r)
+			}
+		})
+	}
+}
+
 // TestWalk_ReportsAnUninspectableRepositoryRatherThanDroppingIt covers a
 // repository Walk finds but profile.Inspect cannot resolve, a clone with
 // no origin remote configured: Walk must still report it, with Err set,

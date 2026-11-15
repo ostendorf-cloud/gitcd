@@ -87,16 +87,20 @@ func runCd(args []string, stdin io.Reader, isTerminal bool, stdout, stderr io.Wr
 // having it. See scanRepositories's own doc comment for the rule this
 // follows for every other command, and for why its result, which this
 // function builds candidates from in order without sorting it again, is
-// already sorted by name.
+// already sorted by name. "cd" needs only a repository's path, so a
+// repository scan could not inspect, such as one with no remote, stays a
+// candidate, and so does every worktree of one.
 func cdCandidates(ctx context.Context, cfg config.Config, managedDir string, logger *slog.Logger) ([]cdCandidate, error) {
 	results, err := scanRepositories(ctx, cfg, managedDir, true)
 	if err != nil {
 		return nil, fmt.Errorf("cd: %w", err)
 	}
-	results = keepInspectable(results, logger)
 
 	candidates := make([]cdCandidate, 0, len(results))
 	for _, res := range results {
+		if res.Err != nil {
+			logger.Debug("a repository scan could not fully inspect is still a cd candidate", "path", res.Repo.Path, "error", res.Err)
+		}
 		rel, err := filepath.Rel(cfg.Root, res.Repo.Path)
 		if err != nil {
 			rel = res.Repo.Path

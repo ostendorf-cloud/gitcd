@@ -20,9 +20,11 @@ import (
 // scan.Walk as a repository boundary in its own right, counts as one of
 // the repositories this call reports back. A Result scan.Walk could not
 // inspect, most commonly one with no configured remote, is never dropped
-// here: its own IsWorktree reads false either way, so it always passes
-// this filter; keepInspectable is where a caller that cannot act on an
-// uninspectable repository drops it instead.
+// here: the rule below applies to it exactly as to an inspectable one,
+// since scan.Walk still discovers its linked worktrees and marks each
+// IsWorktree; keepInspectable is where a caller that cannot act on an
+// uninspectable repository drops it instead. The rule has no exception
+// for an uninspectable repository.
 //
 // The rule this package applies, by command, stated once here rather than
 // answered separately by each caller:
@@ -90,13 +92,14 @@ func scanRepositories(ctx context.Context, cfg config.Config, managedDir string,
 
 // keepInspectable drops a Result scanRepositories could not resolve,
 // logging it as a warning through logger rather than failing the whole
-// command: "list", "cd" and "doctor" each act on the resolved remote and
+// command: "list" and "doctor" each act on the resolved remote and
 // identity profile.Inspect provides, so a repository it could not
 // resolve, most commonly one with no configured remote, carries nothing
-// they can act on. "status", "sync", "path" and "open" need only a
+// they can act on. "cd", "status", "sync", "path" and "open" need only a
 // repository's own path, which a Result carries even when it could not
 // be inspected, so they call scanRepositories directly instead and keep
-// such a repository rather than dropping it.
+// such a repository rather than dropping it. ("open" then reports that
+// such a repository has no remote to open.)
 func keepInspectable(results []scan.Result, logger *slog.Logger) []scan.Result {
 	kept := make([]scan.Result, 0, len(results))
 	for _, res := range results {

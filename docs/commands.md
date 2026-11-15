@@ -337,7 +337,9 @@ Exit codes:
 
 - `0`: the URL was opened (or printed, with `--print`).
 - `1`: the query could not be resolved to a cloned repository, its remote could not be read or
-  parsed, or launching the browser failed.
+  parsed, or launching the browser failed. A repository with no `origin` remote, and any linked
+  worktree of one, still resolves like every other repository, so `open` then fails with an
+  error saying the repository has no remote to open.
 - `2`: more than one argument was given.
 
 ## doctor
