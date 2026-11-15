@@ -131,6 +131,8 @@ mkdir -p dist
 echo archive >dist/fixture_linux_amd64.tar.gz
 echo archive >dist/fixture_windows_amd64.zip
 echo checksum >dist/fixture_1.0.0_checksums.txt
+mkdir -p dist/homebrew/Formula
+echo formula >dist/homebrew/Formula/fixture.rb
 FAKE_GORELEASER
 chmod +x "${fake_bin}/goreleaser"
 
@@ -155,7 +157,13 @@ if [ "$1 $2" = "release view" ]; then
   exit 0
 fi
 case "$1 $2" in
-"release upload"|"release edit") exit 0 ;;
+"release upload")
+  case "$3" in
+  *-upload-fails*) echo "fake gh: upload failed" >&2; exit 1 ;;
+  esac
+  exit 0
+  ;;
+"release edit") exit 0 ;;
 *) echo "fake gh: unexpected call: $*" >&2; exit 1 ;;
 esac
 FAKE_GH
@@ -181,6 +189,23 @@ reset_case_state() {
   local build_dir="${work}/build"
   rm -rf "${build_dir}"
   mkdir -p "${build_dir}"
+
+  export GITHUB_OUTPUT="${work}/github-output"
+  : >"${GITHUB_OUTPUT}"
+}
+
+# check_formula_hashes name want asserts the formula-hashes step output the
+# last case wrote, the input the homebrew job verifies the formula asset
+# against. want is the whole block, "" for none.
+check_formula_hashes() {
+  local case_name="$1" want="$2" got
+  got="$(cat "${GITHUB_OUTPUT}")"
+  if [ "${got}" != "${want}" ]; then
+    echo "FAIL ${case_name}: output = ${got}, want ${want}"
+    failures=$((failures + 1))
+    return
+  fi
+  echo "PASS ${case_name}"
 }
 
 # run_script runs the script with TAGS=tags from a fresh build directory,
@@ -300,9 +325,14 @@ run_case "a draft release is built, attached and published" "v1.0.0-draft" \
 gh release view v1.0.0-draft --json isDraft --jq .isDraft
 git worktree add --quiet --detach ${work}/worktree-1 v1.0.0-draft
 goreleaser release --clean --skip=announce,validate,publish
-gh release upload v1.0.0-draft dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt --clobber
+gh release upload v1.0.0-draft dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt dist/homebrew/Formula/fixture.rb --clobber
 gh release edit v1.0.0-draft --draft=false
 git worktree remove ${work}/worktree-1"
+formula_hash="$(printf 'formula\n' | shasum -a 256 | cut -d' ' -f1)"
+check_formula_hashes "the formula hash of the build is a step output" \
+  "formula-hashes<<FORMULA_HASHES_EOF
+v1.0.0-draft ${formula_hash}
+FORMULA_HASHES_EOF"
 
 run_case "an already published release is left alone" "v1.0.0-published" \
   "git fetch origin --tags --force
@@ -314,10 +344,14 @@ v2.0.0-published" \
 gh release view v1.0.0-draft --json isDraft --jq .isDraft
 git worktree add --quiet --detach ${work}/worktree-1 v1.0.0-draft
 goreleaser release --clean --skip=announce,validate,publish
-gh release upload v1.0.0-draft dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt --clobber
+gh release upload v1.0.0-draft dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt dist/homebrew/Formula/fixture.rb --clobber
 gh release edit v1.0.0-draft --draft=false
 git worktree remove ${work}/worktree-1
 gh release view v2.0.0-published --json isDraft --jq .isDraft"
+check_formula_hashes "only a build that ran records a hash" \
+  "formula-hashes<<FORMULA_HASHES_EOF
+v1.0.0-draft ${formula_hash}
+FORMULA_HASHES_EOF"
 
 run_failure_case \
   "a gh release view failure stops the script instead of being treated as already published" \
@@ -326,6 +360,15 @@ run_failure_case \
 run_partial_failure_case \
   "a goreleaser failure partway through a build still removes the worktree" \
   "v1.0.0-draft-goreleaser-fails" "fake goreleaser: build failed"
+check_formula_hashes "a build that failed records no hash" ""
+
+run_partial_failure_case \
+  "an upload failure still removes the worktree" \
+  "v1.0.0-draft-upload-fails" "fake gh: upload failed"
+check_formula_hashes "a failure after the build still hands over the hash" \
+  "formula-hashes<<FORMULA_HASHES_EOF
+v1.0.0-draft-upload-fails ${formula_hash}
+FORMULA_HASHES_EOF"
 
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} test(s) failed"

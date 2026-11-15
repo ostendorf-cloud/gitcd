@@ -76,7 +76,15 @@ tasks:
   lint:goreleaser:
     desc: goreleaser configuration lint
     cmds:
-      - goreleaser check
+      # goreleaser check exits 2 for a valid file that uses a deprecated
+      # property, and 1 for an invalid one. The brews deprecation is a
+      # decision (docs/adr/0003-homebrew-formula-not-cask.md), so exit 2 passes
+      # only for exactly this output, see scripts/check-goreleaser-output.sh.
+      # NO_COLOR is a second measure: that script strips colours itself.
+      - |
+        status=0
+        out="$(NO_COLOR=1 goreleaser check 2>&1)" || status=$?
+        echo "$out" | scripts/check-goreleaser-output.sh "$status"
 
   lint:shell:
     desc: Shell script lint for this repository's own CI scripts
@@ -102,6 +110,28 @@ tasks:
     desc: Shell script tests for this repository's own CI scripts
     cmds:
       - scripts/publish-release-assets_test.sh
+      - scripts/check-goreleaser-output_test.sh
+      - scripts/check-homebrew-formula_test.sh
+      - scripts/publish-homebrew-formula_test.sh
+
+  test:formula:
+    desc: Render the Homebrew formula from a snapshot build and check it
+    cmds:
+      - goreleaser release --snapshot --clean --skip=announce,validate,publish
+      - |
+        f=dist/homebrew/Formula/gitcd.rb
+        test -s "$f"
+        for p in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
+          grep -qE "releases/download/[^/]+/gitcd_${p}\.tar\.gz" "$f" || { echo "formula has no URL for ${p}" >&2; exit 1; }
+          sum="$(grep "gitcd_${p}.tar.gz" dist/gitcd_*_checksums.txt | cut -d' ' -f1)"
+          grep -qF "sha256 \"${sum}\"" "$f" || { echo "formula checksum for ${p} differs from the checksums file" >&2; exit 1; }
+        done
+        grep -q "on_macos do" "$f" && grep -q "on_linux do" "$f"
+        grep -qx '  depends_on "git"' "$f" || { echo "formula does not depend on git" >&2; exit 1; }
+        # Every line must be part of the generated template the release
+        # check expects, so a change to the brews entry updates both.
+        tag="$(grep -m1 -oE 'releases/download/[^/]+' "$f" | cut -d/ -f3)"
+        scripts/check-homebrew-formula.sh "$f" "$tag"
 
   check:
     desc: Every check, one after another
@@ -120,6 +150,7 @@ tasks:
       - task: test:go
       - task: test:pwsh
       - task: test:shell
+      - task: test:formula
       - task: build
 
   fmt:
