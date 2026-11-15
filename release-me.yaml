@@ -1,0 +1,7 @@
+# Only this key departs from release-me's defaults: a single "main"
+# component, first-parent changelog, default labels and an immediate
+# publish all suit this repository already. GitHub's immutable releases
+# setting cannot be read back through the API, so this stays on
+# regardless of whether it is currently enabled for this repository; see
+# release-me's own docs/adr/0001-draft-releases-until-assets-attach.md.
+github-release-draft-until-assets-attach: true

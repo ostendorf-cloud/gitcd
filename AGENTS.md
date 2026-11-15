@@ -32,6 +32,8 @@ not repeated here.
   directory alike, and asking git for the linked worktrees that boundary skips past.
 - `internal/shell/`: the per shell init snippet `shell-init` prints, including the `cd` tab
   completion registered for zsh and fish.
+- `scripts/`: CI glue specific to this repository's own workflows, such as attaching and
+  publishing release assets after `release.yaml` drafts a release.
 
 Whether a linked worktree counts as one of the repositories a command reports is a single,
 stated rule, not a separate choice per command: `cmd/gitcd/repos.go`'s `scanRepositories` doc

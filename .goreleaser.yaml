@@ -29,11 +29,11 @@ archives:
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
 
-# release-me already created the GitHub release and its changelog entry by
-# the time this runs; keep its notes instead of letting goreleaser write its
-# own, and skip generating a second changelog it would never show.
-release:
-  mode: keep-existing
-
-changelog:
-  disable: true
+# No release section: release.yaml always runs this with --skip=publish,
+# since goreleaser's own GitHub release handling cannot see the draft
+# release release-me already created for the tag (GitHub's "get a release
+# by tag" lookup excludes drafts). release.yaml attaches the archives and
+# checksums built here with "gh release upload" and publishes with
+# "gh release edit --draft=false" instead. See
+# docs/adr/0001-draft-releases-until-assets-attach.md in release-me's own
+# repository, the organisation's precedent for this shape.
