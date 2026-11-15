@@ -244,7 +244,9 @@ func renderGitdirGlob(cfg config.Config, rule config.Rule) string {
 			return "*"
 		}
 	})
-	return filepath.Join(cfg.Root, rendered) + "/**"
+	// git reads a backslash in a gitdir pattern as an escape, so the
+	// pattern always uses forward slashes, a drive letter path included.
+	return filepath.ToSlash(filepath.Join(cfg.Root, rendered)) + "/**"
 }
 
 // azureDevOpsHost is the canonical host name Azure DevOps rules are

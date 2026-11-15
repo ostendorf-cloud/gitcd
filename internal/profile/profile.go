@@ -272,8 +272,12 @@ func isWithin(path, dir string) bool {
 	if dir == "" {
 		return false
 	}
-	if path == dir {
-		return true
+	// filepath.Rel compares with the system's own separator and, on
+	// Windows, without regard to case, which a hard coded "/" prefix test
+	// did neither of.
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
 	}
-	return len(path) > len(dir) && path[:len(dir)] == dir && path[len(dir)] == '/'
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
