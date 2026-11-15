@@ -54,6 +54,18 @@ task run -- clone github.com/acme/widget   # run the CLI from source
 
 - One task target per check and one CI job per target. `check` aggregates them and holds no
   command of its own. CI calls the small targets, never `check`.
+- Supported systems: Linux, macOS and Windows. The `test` job in `checks.yaml` runs
+  `task test:go` on all three. Every other job runs on Linux only.
+- Two license checks, both in `check`:
+  - `lint:license` runs `addlicense -check` over every `.go` and `.sh` file, the generated
+    `internal/config/gitkeys.go` included, since its generator writes the header. It catches a
+    missing or malformed header. It cannot catch a header that names another license.
+  - `lint:license-spdx` runs `scripts/check-license-spdx.sh` over the same files. It compares
+    every SPDX identifier line in each file's first 10 lines with the license `LICENSE` holds,
+    so a wrong or contradicting identifier or a swapped `LICENSE` fails, and so does a tree
+    with no `.go` or `.sh` file. It cannot catch a missing header, `lint:license` does that, and it
+    reads only the first 10 lines. It knows Apache-2.0, Elastic-2.0 and MIT. Another `LICENSE`
+    fails it until the script learns the new one.
 
 ## Constraints
 
@@ -78,6 +90,13 @@ task run -- clone github.com/acme/widget   # run the CLI from source
 ```
 
 ## Deviations
+
+- The `license` job in `checks.yaml` calls `ostendorf-cloud/workflows`' `reusable-license.yaml`
+  instead of `task lint:license`. The shared workflow pins addlicense itself. `task
+  lint:license` stays and runs the same tool, flags and files locally.
+- The `renovate-config` job in `checks.yaml` calls `reusable-renovate-config.yaml` and has no
+  local Task target. The shared workflow runs Renovate through npm and needs the network, so a
+  local copy would add a second pin to keep in step. Only CI validates `renovate.json`.
 
 - yamllint's line-length limit is 140, not the default 120. A pinned reusable workflow
   reference needs the full line for its commit digest and version comment. Most of the

@@ -8,6 +8,7 @@ actionlint = "1"
 markdownlint-cli2 = "0.20"
 yamllint = "1"
 gitleaks = "8"
+"aqua:google/addlicense" = "1.2.0"
 goreleaser = "2"
 shellcheck = "0"
 # Used only to execute the "gitcd shell-init pwsh" snippet in its own
