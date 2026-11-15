@@ -359,6 +359,11 @@ case of, a missing or stale managed file, and a global git identity key, which
   renamed in place. Every other finding, identity drift, a stale pin, a structural path
   mismatch and every global identity key, is always reported and never touched: a value
   `doctor` did not write is never one it overwrites.
+
+  A case-only rename moves one directory per run, the topmost segment that actually differs. A
+  repository whose path differs in case at more than one segment therefore needs `--fix` more
+  than once: each run moves the next segment up and leaves the finding outstanding, with exit
+  code 1, until the last one is placed. A finding surviving a run is that, not a failed repair.
 - `--dry-run`, with `--fix`, prints what would change without writing or moving anything.
 - `--json` prints a structured object instead of the text report: `configPath` and `managedDir`
   always, `findings` when any finding remains outstanding, and `fixed` when `--fix` repaired
