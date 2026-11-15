@@ -26,7 +26,9 @@ func TestInit(t *testing.T) {
 		{name: "bash returns the bash snippet", shell: "bash", want: shell.Bash()},
 		{name: "zsh returns the zsh snippet", shell: "zsh", want: shell.Zsh()},
 		{name: "fish returns the fish snippet", shell: "fish", want: shell.Fish()},
-		{name: "an unsupported shell is rejected", shell: "powershell", wantErr: true},
+		{name: "pwsh returns the powershell snippet", shell: "pwsh", want: shell.PowerShell()},
+		{name: "powershell returns the powershell snippet", shell: "powershell", want: shell.PowerShell()},
+		{name: "an unsupported shell is rejected", shell: "cmd", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -51,7 +53,7 @@ func TestInit(t *testing.T) {
 func TestInit_EveryWrittenSnippetGuardsCloneAndPath(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"bash", "zsh", "fish"} {
+	for _, name := range []string{"bash", "zsh", "fish", "pwsh"} {
 		snippet, err := shell.Init(name)
 		if err != nil {
 			t.Fatalf("Init(%q) returned an unexpected error: %v", name, err)
@@ -180,6 +182,76 @@ func TestFish_RegistersCdCompletion(t *testing.T) {
 	} {
 		if !strings.Contains(snippet, want) {
 			t.Fatalf("fish snippet does not contain %q: %s", want, snippet)
+		}
+	}
+}
+
+// TestPowerShell_GuardsCdOnTheTargetActuallyExisting checks the
+// PowerShell snippet's guard against a path "clone --dry-run" printed
+// without ever creating by string match only: PowerShell is not
+// installed in this environment and is not in the mise tool registry,
+// so no real PowerShell process can execute it. "Test-Path ... -PathType
+// Container" is the PowerShell equivalent of bash's "[ -d ... ]" and
+// fish's "test -d ...".
+func TestPowerShell_GuardsCdOnTheTargetActuallyExisting(t *testing.T) {
+	t.Parallel()
+
+	snippet := shell.PowerShell()
+	for _, want := range []string{"Test-Path", "-PathType Container"} {
+		if !strings.Contains(snippet, want) {
+			t.Fatalf("powershell snippet does not guard cd on the target existing: %s", snippet)
+		}
+	}
+}
+
+// TestPowerShell_PropagatesNonZeroExit checks, by string match only, that
+// the PowerShell snippet returns immediately on a non zero exit rather
+// than printing the real binary's stdout or running anything else
+// afterward that could change $LASTEXITCODE before the caller reads it.
+// See the doc comment on the powerShell constant for why that ordering
+// matters.
+func TestPowerShell_PropagatesNonZeroExit(t *testing.T) {
+	t.Parallel()
+
+	snippet := shell.PowerShell()
+	if !strings.Contains(snippet, "$LASTEXITCODE -ne 0") {
+		t.Fatalf("powershell snippet does not check $LASTEXITCODE: %s", snippet)
+	}
+}
+
+// TestPowerShell_RegistersCdCompletion checks the PowerShell completion
+// block by string match only, for the same reason TestFish_RegistersCdCompletion
+// does: no PowerShell process is available to run it against.
+func TestPowerShell_RegistersCdCompletion(t *testing.T) {
+	t.Parallel()
+
+	snippet := shell.PowerShell()
+	for _, want := range []string{
+		"Register-ArgumentCompleter",
+		"-Native",
+		"-CommandName gitcd",
+		"list --worktrees",
+	} {
+		if !strings.Contains(snippet, want) {
+			t.Fatalf("powershell snippet does not contain %q: %s", want, snippet)
+		}
+	}
+}
+
+// TestInit_UnsupportedShellNamesEverySupportedShell checks that an
+// unknown shell name fails with every shell gitcd actually supports
+// named in the error, pwsh and powershell included, rather than only the
+// three that existed before this one.
+func TestInit_UnsupportedShellNamesEverySupportedShell(t *testing.T) {
+	t.Parallel()
+
+	_, err := shell.Init("cmd")
+	if err == nil {
+		t.Fatal("Init(\"cmd\") = nil, want an error")
+	}
+	for _, want := range []string{"bash", "zsh", "fish", "pwsh", "powershell"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Init(\"cmd\") error %q does not name %q", err, want)
 		}
 	}
 }

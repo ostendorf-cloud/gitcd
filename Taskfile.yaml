@@ -70,6 +70,11 @@ tasks:
     cmds:
       - go test -race -count=1 ./...
 
+  test:pwsh:
+    desc: Run the "gitcd shell-init pwsh" snippet under a real PowerShell process
+    cmds:
+      - go test -race -count=1 -run TestShellWrapper_ExecutesInPowerShell ./cmd/gitcd/...
+
   check:
     desc: Every check, one after another
     cmds:
@@ -82,6 +87,7 @@ tasks:
       - task: lint:goreleaser
       - task: lint:secrets
       - task: test:go
+      - task: test:pwsh
       - task: build
 
   fmt:

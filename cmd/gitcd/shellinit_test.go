@@ -21,6 +21,8 @@ func TestRunShellInit(t *testing.T) {
 		{name: "zsh", shellID: "zsh", want: shell.Zsh()},
 		{name: "bash", shellID: "bash", want: shell.Bash()},
 		{name: "fish", shellID: "fish", want: shell.Fish()},
+		{name: "pwsh", shellID: "pwsh", want: shell.PowerShell()},
+		{name: "powershell", shellID: "powershell", want: shell.PowerShell()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -43,13 +45,13 @@ func TestRunShellInit_UnsupportedShellFails(t *testing.T) {
 	t.Parallel()
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"shell-init", "powershell"}, &stdout, &stderr)
+	code := run([]string{"shell-init", "cmd"}, &stdout, &stderr)
 
 	if code == 0 {
-		t.Fatal("shell-init powershell = 0, want a failure")
+		t.Fatal("shell-init cmd = 0, want a failure")
 	}
 	if stdout.Len() != 0 {
-		t.Fatalf("shell-init powershell wrote to stdout: %q", stdout.String())
+		t.Fatalf("shell-init cmd wrote to stdout: %q", stdout.String())
 	}
 }
 

@@ -34,7 +34,7 @@ Commands:
   open         open a repository's remote in a browser
   doctor       report identity and layout drift across every repository
   adopt        move an existing clone into the layout and fix its config
-  shell-init   print the shell integration snippet for zsh, bash or fish
+  shell-init   print the shell integration snippet for zsh, bash, fish, pwsh or powershell
   version      print the version
 
 Every command prints its result on stdout and everything else on stderr.
