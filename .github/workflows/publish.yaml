@@ -1,0 +1,33 @@
+name: publish
+
+# release-me (release.yaml) mints its token from the GitHub App, not the
+# default GITHUB_TOKEN, so the release it publishes fires this workflow
+# instead of being swallowed by the recursion guard GitHub applies to
+# GITHUB_TOKEN-authored events. Triggering on "published" rather than a tag
+# push also guarantees the GitHub release already exists when goreleaser
+# runs, which "release: mode: keep-existing" in .goreleaser.yaml relies on.
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+      - name: Build the release archives and attach them to the GitHub release
+        run: task release:publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

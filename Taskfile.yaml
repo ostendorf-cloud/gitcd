@@ -20,6 +20,11 @@ tasks:
     cmds:
       - goreleaser release --snapshot --clean
 
+  release:publish:
+    desc: Build the tagged release with goreleaser and attach it to the GitHub release
+    cmds:
+      - goreleaser release --clean
+
   run:
     desc: Run the CLI from source, arguments after --
     cmds:
