@@ -19,7 +19,7 @@ var update = flag.Bool("update", false, "refresh the golden files instead of com
 
 func testConfig() config.Config {
 	return config.Config{
-		Root:          "/home/simon/Code",
+		Root:          rootDir,
 		Default:       "{host}/{owner}/{repo}",
 		UseConfigOnly: true,
 		Hosts: map[string]config.Host{
@@ -59,7 +59,7 @@ func testConfig() config.Config {
 
 func TestRender(t *testing.T) {
 	cfg := testConfig()
-	home := "/home/simon"
+	home := homeDir
 
 	rendered, err := gitconfig.Render(cfg, home)
 	if err != nil {
@@ -80,9 +80,10 @@ func TestRender(t *testing.T) {
 		got.WriteString(rendered[path])
 	}
 
+	gotText := unixPaths(got.String())
 	goldenPath := filepath.Join("testdata", "render.golden")
 	if *update {
-		if err := os.WriteFile(goldenPath, []byte(got.String()), 0o644); err != nil {
+		if err := os.WriteFile(goldenPath, []byte(gotText), 0o644); err != nil {
 			t.Fatalf("write golden file %s: %v", goldenPath, err)
 		}
 	}
@@ -90,8 +91,11 @@ func TestRender(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read golden file %s: %v", goldenPath, err)
 	}
-	if got.String() != string(want) {
-		t.Fatalf("Render() does not match %s, run the test with -update to refresh it:\n%s", goldenPath, got.String())
+	// A Windows checkout may have turned the golden file's line endings
+	// into CRLF.
+	wantText := strings.ReplaceAll(string(want), "\r\n", "\n")
+	if gotText != wantText {
+		t.Fatalf("Render() does not match %s, run the test with -update to refresh it:\n%s", goldenPath, gotText)
 	}
 }
 
@@ -107,11 +111,11 @@ func TestRender_SpecificityOrder(t *testing.T) {
 	// instead would place the general block after the specific one,
 	// which the assertion below catches.
 	cfg := testConfig()
-	rendered, err := gitconfig.Render(cfg, "/home/simon")
+	rendered, err := gitconfig.Render(cfg, homeDir)
 	if err != nil {
 		t.Fatalf("Render() returned an unexpected error: %v", err)
 	}
-	includes := rendered[gitconfig.IncludePath("/home/simon")]
+	includes := rendered[gitconfig.IncludePath(homeDir)]
 
 	if !strings.Contains(includes, "locked-down.gitconfig") {
 		t.Fatalf("Render() include file never references the locked-down profile:\n%s", includes)
@@ -272,17 +276,17 @@ func TestRender_HasconfigFormsPerRule(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := config.Config{
-				Root:     "/home/simon/Code",
+				Root:     rootDir,
 				Default:  "{host}/{owner}/{repo}",
 				Hosts:    tt.hosts,
 				Profiles: map[string]config.Profile{"private": {"user.email": "simon@example.test"}},
 				Rules:    []config.Rule{tt.rule},
 			}
-			rendered, err := gitconfig.Render(cfg, "/home/simon")
+			rendered, err := gitconfig.Render(cfg, homeDir)
 			if err != nil {
 				t.Fatalf("Render() returned an unexpected error: %v", err)
 			}
-			includes := rendered[gitconfig.IncludePath("/home/simon")]
+			includes := rendered[gitconfig.IncludePath(homeDir)]
 			for _, want := range tt.wants {
 				if !strings.Contains(includes, want) {
 					t.Fatalf("Render() include file is missing %q:\n%s", want, includes)
@@ -308,17 +312,17 @@ func TestRender_UnconditionalUseConfigOnly(t *testing.T) {
 	t.Run("present before every includeIf block when useConfigOnly is on", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.Config{
-			Root:          "/home/simon/Code",
+			Root:          rootDir,
 			Default:       "{host}/{owner}/{repo}",
 			UseConfigOnly: true,
 			Profiles:      map[string]config.Profile{"private": {"user.email": "simon@example.test"}},
 			Rules:         []config.Rule{{Host: "github.com", Profile: "private"}},
 		}
-		rendered, err := gitconfig.Render(cfg, "/home/simon")
+		rendered, err := gitconfig.Render(cfg, homeDir)
 		if err != nil {
 			t.Fatalf("Render() returned an unexpected error: %v", err)
 		}
-		includes := rendered[gitconfig.IncludePath("/home/simon")]
+		includes := rendered[gitconfig.IncludePath(homeDir)]
 
 		unconditional := strings.Index(includes, "[user]\n\tuseConfigOnly = true")
 		if unconditional == -1 {
@@ -332,17 +336,17 @@ func TestRender_UnconditionalUseConfigOnly(t *testing.T) {
 	t.Run("absent when the config opts out", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.Config{
-			Root:          "/home/simon/Code",
+			Root:          rootDir,
 			Default:       "{host}/{owner}/{repo}",
 			UseConfigOnly: false,
 			Profiles:      map[string]config.Profile{"private": {"user.email": "simon@example.test"}},
 			Rules:         []config.Rule{{Host: "github.com", Profile: "private"}},
 		}
-		rendered, err := gitconfig.Render(cfg, "/home/simon")
+		rendered, err := gitconfig.Render(cfg, homeDir)
 		if err != nil {
 			t.Fatalf("Render() returned an unexpected error: %v", err)
 		}
-		includes := rendered[gitconfig.IncludePath("/home/simon")]
+		includes := rendered[gitconfig.IncludePath(homeDir)]
 
 		if strings.Contains(includes, "useConfigOnly") {
 			t.Fatalf("Render() include file carries useConfigOnly despite opting out:\n%s", includes)
@@ -351,12 +355,12 @@ func TestRender_UnconditionalUseConfigOnly(t *testing.T) {
 
 	t.Run("present even with no profiles and no rules at all", func(t *testing.T) {
 		t.Parallel()
-		cfg := config.Config{Root: "/home/simon/Code", Default: "{host}/{owner}/{repo}", UseConfigOnly: true}
-		rendered, err := gitconfig.Render(cfg, "/home/simon")
+		cfg := config.Config{Root: rootDir, Default: "{host}/{owner}/{repo}", UseConfigOnly: true}
+		rendered, err := gitconfig.Render(cfg, homeDir)
 		if err != nil {
 			t.Fatalf("Render() returned an unexpected error: %v", err)
 		}
-		includes := rendered[gitconfig.IncludePath("/home/simon")]
+		includes := rendered[gitconfig.IncludePath(homeDir)]
 		if !strings.Contains(includes, "[user]\n\tuseConfigOnly = true") {
 			t.Fatalf("Render() with no profiles and no rules = %q, want the unconditional useConfigOnly block still present", includes)
 		}
@@ -367,18 +371,18 @@ func TestRender_GitdirBlock(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Config{
-		Root:     "/home/simon/Code",
+		Root:     rootDir,
 		Default:  "{host}/{owner}/{repo}",
 		Profiles: map[string]config.Profile{"private": {"user.email": "simon@example.test"}},
 		Rules:    []config.Rule{{Host: "github.com", Owner: "ostendorf-cloud", Profile: "private"}},
 	}
-	rendered, err := gitconfig.Render(cfg, "/home/simon")
+	rendered, err := gitconfig.Render(cfg, homeDir)
 	if err != nil {
 		t.Fatalf("Render() returned an unexpected error: %v", err)
 	}
-	includes := rendered[gitconfig.IncludePath("/home/simon")]
+	includes := rendered[gitconfig.IncludePath(homeDir)]
 
-	want := `gitdir/i:/home/simon/Code/github.com/ostendorf-cloud/*/**`
+	want := `gitdir/i:` + filepath.ToSlash(rootDir) + `/github.com/ostendorf-cloud/*/**`
 	if !strings.Contains(includes, want) {
 		t.Fatalf("Render() include file is missing the gitdir block %q:\n%s", want, includes)
 	}
@@ -387,17 +391,17 @@ func TestRender_GitdirBlock(t *testing.T) {
 func TestPaths(t *testing.T) {
 	t.Parallel()
 
-	home := "/home/simon"
-	if got, want := gitconfig.Dir(home), "/home/simon/.config/gitcd"; got != want {
+	home := homeDir
+	if got, want := gitconfig.Dir(home), filepath.Join(home, ".config", "gitcd"); got != want {
 		t.Fatalf("Dir(%q) = %q, want %q", home, got, want)
 	}
-	if got, want := gitconfig.ProfilesDir(home), "/home/simon/.config/gitcd/profiles"; got != want {
+	if got, want := gitconfig.ProfilesDir(home), filepath.Join(home, ".config", "gitcd", "profiles"); got != want {
 		t.Fatalf("ProfilesDir(%q) = %q, want %q", home, got, want)
 	}
-	if got, want := gitconfig.ProfilePath(home, "private"), "/home/simon/.config/gitcd/profiles/private.gitconfig"; got != want {
+	if got, want := gitconfig.ProfilePath(home, "private"), filepath.Join(home, ".config", "gitcd", "profiles", "private.gitconfig"); got != want {
 		t.Fatalf("ProfilePath(%q, %q) = %q, want %q", home, "private", got, want)
 	}
-	if got, want := gitconfig.IncludePath(home), "/home/simon/.config/gitcd/includes.gitconfig"; got != want {
+	if got, want := gitconfig.IncludePath(home), filepath.Join(home, ".config", "gitcd", "includes.gitconfig"); got != want {
 		t.Fatalf("IncludePath(%q) = %q, want %q", home, got, want)
 	}
 }
