@@ -1,0 +1,25 @@
+name: dco
+
+# Developer Certificate of Origin check, delegated to the organisation's shared reusable
+# workflow. Only GH_APP_SECURITY_PRIVATE_KEY is forwarded, the one secret the reusable workflow
+# declares. It is optional: it publishes the verdict as a check run of the security app. Without it,
+# and for a pull request from a fork, the job's own pass or fail status carries the verdict.
+#
+# "pull_request", never "pull_request_target": the latter would hand a fork's code the app's
+# installation token.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  signoff:
+    uses: ostendorf-cloud/workflows/.github/workflows/reusable-dco.yaml@a798b963d20b239bec48c101af965e08fac36146  # v0.3.0
+    secrets:
+      GH_APP_SECURITY_PRIVATE_KEY: ${{ secrets.GH_APP_SECURITY_PRIVATE_KEY }}
