@@ -534,14 +534,14 @@ func TestLoad_ProfileKeySubsection(t *testing.T) {
 
 	t.Run("a plain subsection is accepted", func(t *testing.T) {
 		home := withHome(t)
-		writeFile(t, filepath.Join(home, ".gitcd.yaml"), profileFile(map[string]string{"gpg.ssh.allowedSignersFile": "/home/simon/.signers"}))
+		writeFile(t, filepath.Join(home, ".gitcd.yaml"), profileFile(map[string]string{"mergetool.vimdiff.layout": "LOCAL,BASE,REMOTE"}))
 
 		got, err := config.Load()
 		if err != nil {
 			t.Fatalf("Load() returned an unexpected error: %v", err)
 		}
-		if got.Profiles["private"]["gpg.ssh.allowedSignersFile"] != "/home/simon/.signers" {
-			t.Fatalf("private profile = %v, want it to carry gpg.ssh.allowedSignersFile", got.Profiles["private"])
+		if got.Profiles["private"]["mergetool.vimdiff.layout"] != "LOCAL,BASE,REMOTE" {
+			t.Fatalf("private profile = %v, want it to carry mergetool.vimdiff.layout", got.Profiles["private"])
 		}
 	})
 }
@@ -927,6 +927,10 @@ func TestLoad_UnsafeProfileKeys(t *testing.T) {
 		{name: "a name ending in the templatedir suffix", key: "init.templateDir"},
 		{name: "a name ending in the cmd suffix", key: "difftool.vimdiff.cmd"},
 		{name: "a trust decision name", key: "safe.directory"},
+		{name: "the trust store an ssh signature is checked against", key: "gpg.ssh.allowedSignersFile"},
+		{name: "an address every request for a host goes to", key: "http.curloptResolve"},
+		{name: "an object check severity", key: "fsck.missingEmail"},
+		{name: "an object check severity on the receiving side", key: "receive.fsck.missingEmail"},
 		{name: "a transport decision name", key: "protocol.ext.allow"},
 		{name: "an output destination name", key: "trace2.destination"},
 		{name: "a key in the alias section", key: "alias.co"},
@@ -954,12 +958,11 @@ func TestLoad_UnsafeProfileKeys(t *testing.T) {
 	t.Run("the signing keys a profile exists to set need no opt in", func(t *testing.T) {
 		home := withHome(t)
 		writeFile(t, filepath.Join(home, ".gitcd.yaml"), profileFile(map[string]string{
-			"user.email":                 "simon@example.test",
-			"user.signingkey":            "ssh-ed25519 AAAAEXAMPLE",
-			"gpg.format":                 "ssh",
-			"gpg.ssh.allowedSignersFile": "/home/simon/.signers",
-			"commit.gpgsign":             "true",
-			"tag.gpgsign":                "true",
+			"user.email":      "simon@example.test",
+			"user.signingkey": "ssh-ed25519 AAAAEXAMPLE",
+			"gpg.format":      "ssh",
+			"commit.gpgsign":  "true",
+			"tag.gpgsign":     "true",
 		}))
 
 		got, err := config.Load()

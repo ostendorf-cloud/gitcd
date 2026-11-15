@@ -125,7 +125,8 @@ var unsafeExactNames = []string{
 // "init.templateDir", which seeds a new repository from a directory
 // that may hold a config file, is restricted by name already;
 // "core.attributesFile" can name a filter or a diff driver, but only by
-// a name that has to be defined by a config key this gate sees.
+// a name some config key has to define, and gitcd will not write such a
+// definition without an opt in.
 //
 // "includeIf" is named here rather than left to the subsection class,
 // which happens to reject the ":" and "/" every real condition carries.
@@ -140,49 +141,78 @@ var unsafeSections = []string{
 	"url",
 }
 
-// unsafeSectionNames are final names restricted only under one section,
-// because the same name is an ordinary setting elsewhere. A filter's
-// "clean" and "smudge" are the two halves of a content filter git runs;
-// "column.clean" is which columns "git clean -i" prints.
+// unsafeSectionNames are final names that denote a program git runs,
+// restricted only under one section because the same name is an
+// ordinary setting elsewhere. A filter's "clean" and "smudge" are the
+// two halves of a content filter git runs; "column.clean" is which
+// columns "git clean -i" prints.
 //
 // "process" under "filter" decides nothing today: git does not enumerate
 // "filter.<driver>.process", so the unfamiliar key rule reaches it
 // first. It stays because that is a property of the generated list
 // rather than of the key, and the day the list carries it, this is the
 // rule that has to be there.
-// The entries below beyond "filter" are the second category: a key
-// whose value decides whether git verifies something, where it gets the
-// material to verify with, or what it writes to the filesystem. None of
-// them runs a program, so the first category does not describe them,
-// and the reason to restrict them is the same as for the four "core"
-// protections: a profile is applied automatically, per remote, to a
-// repository whose contents came from that remote, so the mechanism
-// that decides who the commit is from should not also decide what git
-// trusts. Each list is every key in that section which qualifies,
-// taken from the generated key list rather than recalled.
+//
+// git documents a form of "submodule.<name>.update" that names a custom
+// command, and says it is not copied out of ".gitmodules" for safety. A
+// profile is a weaker claim to authority than a file in the repository,
+// so if git will not propagate it, gitcd will not write it either.
+var unsafeSectionNames = map[string][]string{
+	"filter":    {"clean", "process", "smudge"},
+	"submodule": {"update"},
+}
+
+// unsafeTrustSectionNames are the second category, and are a map of
+// their own rather than more entries in unsafeSectionNames so that each
+// half can state its own reason. None of these keys names a program, so
+// a refusal saying one does sends the reader looking for a command that
+// is not there.
+//
+// Two flat maps was the cheaper of the two ways to split the reason. The
+// other was one map whose entries carry a reason each, which would
+// repeat the same string once per entry and turn a list a reviewer reads
+// as a section's inventory into a list of pairs.
+//
+// A key here decides whether git verifies something, where it gets the
+// material to verify with, where it sends its requests, or what it
+// writes to the filesystem. The reason to restrict it is the same as for
+// the four "core" protections: a profile is applied automatically, per
+// remote, to a repository whose contents came from that remote, so the
+// mechanism that decides who the commit is from should not also decide
+// what git trusts.
+//
+// Each list is every key in that section which qualifies here, read off
+// the generated key list rather than recalled, including a key another
+// rule reaches as well: "http.sslCAPath" also ends in "path", and
+// leaving it out would make the list read as the section's inventory
+// minus one. The fsck message severities are the exception, an open
+// ended family rather than a list, reached by isFsckSeverity below.
 //
 // A third category is deliberately not restricted: a key naming a file
 // git reads as data. "core.attributesFile", "core.excludesFile",
-// "gpg.ssh.allowedSignersFile", "mailmap.file", "diff.orderFile",
-// "blame.ignoreRevsFile" and "format.signatureFile" all name a file
-// whose contents git interprets, none of which can cause execution or
-// grant trust on its own: an attributes file can name a filter or a
-// diff driver, but only by a name some config key this gate already
-// sees has to define. "http.cookieFile" and "gpg.revocationFile" are
-// not in this category, since one holds session credentials and the
-// other decides which signatures still count.
-var unsafeSectionNames = map[string][]string{
-	"filter": {"clean", "process", "smudge"},
-	"core":   {"protecthfs", "protectntfs", "sharedrepository", "symlinks"},
-	"credential": {
-		"protectprotocol",
-		"sanitizeprompt",
-	},
-	"fetch":   {"fsckobjects"},
-	"gpg":     {"mintrustlevel", "revocationfile"},
-	"receive": {"fsckobjects"},
+// "mailmap.file", "diff.orderFile", "blame.ignoreRevsFile" and
+// "format.signatureFile" all name a file whose contents git interprets,
+// and none grants trust or decides a verification. An attributes file
+// can name a filter or a diff driver, but only by a name some config key
+// has to define, and gitcd will not write such a definition without an
+// opt in. "mailmap.file" and "blame.ignoreRevsFile" change what git
+// shows about authorship, not what it verifies, and
+// "format.signatureFile" is the text appended to a patch mail rather
+// than anything cryptographic. "http.cookieFile" and
+// "gpg.ssh.revocationFile" are not in this category, since one holds
+// session credentials and the other decides which signatures still
+// count, and neither is "gpg.ssh.allowedSignersFile": that file is the
+// trust store an ssh signature is checked against, which is the other
+// half of the same decision as the revocation list, so it is restricted
+// under "gpg" below.
+var unsafeTrustSectionNames = map[string][]string{
+	"core":       {"protecthfs", "protectntfs", "sharedrepository", "symlinks"},
+	"credential": {"protectprotocol", "sanitizeprompt"},
+	"fetch":      {"fsckobjects"},
+	"gpg":        {"allowedsignersfile", "mintrustlevel", "revocationfile"},
 	"http": {
 		"cookiefile",
+		"curloptresolve",
 		"delegation",
 		"emptyauth",
 		"extraheader",
@@ -195,20 +225,67 @@ var unsafeSectionNames = map[string][]string{
 		"savecookies",
 		"schannelcheckrevoke",
 		"schannelusesslcainfo",
+		"sslbackend",
 		"sslcainfo",
+		"sslcapath",
 		"sslcert",
 		"sslkey",
 		"sslverify",
 	},
 	"protocol": {"allow"},
+	"receive":  {"fsckobjects"},
 	"safe":     {"barerepository", "directory"},
-	// git documents a form of "submodule.<name>.update" that names a
-	// custom command, and says it is not copied out of ".gitmodules" for
-	// safety. A profile is a weaker claim to authority than a file in
-	// the repository, so if git will not propagate it, gitcd will not
-	// write it either.
-	"submodule": {"update"},
-	"transfer":  {"credentialsinurl", "fsckobjects"},
+	"transfer": {"credentialsinurl", "fsckobjects"},
+}
+
+// fsckSeveritySections are the sections under which git documents an
+// fsck message severity or a skip list: "fsck.<msg-id>" and
+// "fsck.skipList", plus the "fetch.fsck." and "receive.fsck." spellings
+// of the same two settings. git documents no such spelling under
+// "transfer", whose only fsck key is "transfer.fsckObjects".
+var fsckSeveritySections = []string{"fetch", "fsck", "receive"}
+
+// fsckMessageNames is the set of final names the generated key list
+// carries under "fsck", built once: every message id git documents, with
+// "skipList" beside them.
+//
+// It is derived rather than written out because "fsck.<msg-id>" is an
+// open ended family. git adds message ids as it adds checks, so a hand
+// written list would cover the ids of the day it was written, while
+// reading the set off the generated list carries a regeneration's new
+// ids into the rule under all three spellings with no second edit.
+//
+// The reason to restrict them: "fetch.fsckObjects",
+// "receive.fsckObjects" and "transfer.fsckObjects" switch git's object
+// checks on, and a severity of "ignore" or a skip list turns the same
+// checks off one at a time. Restricting the switch and allowing the per
+// message setting would cover one spelling of the scope decision and not
+// the other.
+//
+// The cost is a refusal in the safe direction: the rule reads the key
+// and not the value, so a profile raising a severity rather than
+// lowering it needs the same opt in. The two "gitmodulesPath" severities
+// are reached here too, which is why pathNameExceptions no longer names
+// them.
+//
+// No ordinary key collides. Every name the generated list carries under
+// "fetch" and "receive" beside their message ids was compared against
+// this set, and the one match is "skipList", which is a key this rule is
+// about rather than a false positive.
+var fsckMessageNames = sync.OnceValue(func() map[string]bool {
+	names := make(map[string]bool)
+	for _, pair := range strings.Fields(knownGitKeyPairs) {
+		if section, name, ok := strings.Cut(pair, "."); ok && section == "fsck" {
+			names[name] = true
+		}
+	}
+	return names
+})
+
+// isFsckSeverity reports whether section and name, both already
+// lowercased, spell an fsck message severity or skip list.
+func isFsckSeverity(section, name string) bool {
+	return contains(fsckSeveritySections, section) && fsckMessageNames()[name]
 }
 
 // inertSections are the sections in which git resolves no key's value to
@@ -296,8 +373,8 @@ var generatedGitKeys = sync.OnceValue(func() map[string]bool {
 //
 // The first is the family rules above, which describe what a key does.
 // They are matched on the section and the final name, never the
-// subsection, and a match is set aside when the value is inert, since a
-// boolean names no command.
+// subsection, and a match is set aside only in a section where git
+// resolves no key's value at all.
 //
 // The second is that the key is not one the git gitcd was generated
 // against documents at all. That is the rule that holds the property the
@@ -332,6 +409,10 @@ func UnsafeKeyReason(key, value string) (string, bool) {
 			return "sets a command git runs, or rewrites the URL git contacts", true
 		case contains(unsafeSectionNames[section], name):
 			return "names a program git runs for this " + section, true
+		case contains(unsafeTrustSectionNames[section], name):
+			return "decides what git verifies, trusts, contacts or writes, rather than naming a command", true
+		case isFsckSeverity(section, name):
+			return "decides whether one of git's object checks still applies", true
 		case contains(unsafeExactNames, name):
 			return "decides what git trusts, writes or resolves something from", true
 		case hasUnsafeSuffix(section, name):
@@ -363,6 +444,8 @@ func keyCanBeRestricted(key string) bool {
 	return !knownKeys()[section+"."+name] ||
 		contains(unsafeSections, section) ||
 		contains(unsafeSectionNames[section], name) ||
+		contains(unsafeTrustSectionNames[section], name) ||
+		isFsckSeverity(section, name) ||
 		contains(unsafeExactNames, name) ||
 		hasUnsafeSuffix(section, name)
 }
@@ -370,11 +453,15 @@ func keyCanBeRestricted(key string) bool {
 // pathNameExceptions are the keys ending in "path" whose value is not a
 // path git resolves anything from. Every other "*path" key in git names
 // a program, a configuration file, a CA bundle or a module directory,
-// so the suffix is the family and these five are the exceptions,
+// so the suffix is the family and these three are the exceptions,
 // checked against the generated list rather than recalled:
 // "core.quotePath", "credential.useHttpPath" and
-// "advice.updateSparsePath" are booleans, and the two "gitmodulesPath"
-// keys set how loudly fsck complains about one.
+// "advice.updateSparsePath" are booleans.
+//
+// "fsck.gitmodulesPath" and "receive.gitmodulesPath" were here as well,
+// as fsck message severities rather than paths. They are restricted
+// deliberately now, by the fsck severity rule, so an entry for either
+// would only decide which of the two reasons a refusal prints.
 //
 // Naming the exceptions rather than the family keeps the safe direction
 // the default: a "*path" key git adds later is restricted until someone
@@ -384,8 +471,6 @@ var pathNameExceptions = []string{
 	"advice.updatesparsepath",
 	"core.quotepath",
 	"credential.usehttppath",
-	"fsck.gitmodulespath",
-	"receive.gitmodulespath",
 }
 
 // hasUnsafeSuffix reports whether name, already lowercased, ends in one

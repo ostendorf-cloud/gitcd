@@ -102,6 +102,8 @@ func TestUnsafeKeyReason_RestrictsWhatItSaysItDoes(t *testing.T) {
 		{"http.sslVerify", "false"},
 		{"http.sslCAInfo", "/tmp/ca.pem"},
 		{"http.sslCAPath", "/tmp/ca"},
+		{"http.sslBackend", "openssl"},
+		{"http.curloptResolve", "example.test:443:127.0.0.1"},
 		{"http.sslCert", "/tmp/client.pem"},
 		{"http.sslKey", "/tmp/client.key"},
 		{"http.cookieFile", "/tmp/cookies"},
@@ -116,7 +118,18 @@ func TestUnsafeKeyReason_RestrictsWhatItSaysItDoes(t *testing.T) {
 		{"fetch.fsckObjects", "false"},
 		{"receive.fsckObjects", "false"},
 		{"gpg.revocationFile", "/tmp/revoked"},
+		{"gpg.ssh.revocationFile", "/tmp/revoked"},
+		{"gpg.ssh.allowedSignersFile", "/home/simon/.signers"},
 		{"gpg.minTrustLevel", "undefined"},
+		// A severity or a skip list turns off the same object checks the
+		// "fsckObjects" switches turn on, in all three spellings git
+		// documents.
+		{"fsck.missingEmail", "ignore"},
+		{"fsck.skipList", "/tmp/skip"},
+		{"fsck.gitmodulesPath", "ignore"},
+		{"fetch.fsck.skipList", "/tmp/skip"},
+		{"receive.fsck.missingEmail", "ignore"},
+		{"receive.gitmodulesPath", "ignore"},
 		// A form git documents as a custom command, and refuses to
 		// propagate out of .gitmodules itself.
 		{"submodule.lib.update", "!/bin/sh"},
@@ -142,7 +155,6 @@ func TestUnsafeKeyReason_RestrictsWhatItSaysItDoes(t *testing.T) {
 		{"user.signingKey", "ssh-ed25519 AAAAEXAMPLE"},
 		{"user.useConfigOnly", "true"},
 		{"gpg.format", "ssh"},
-		{"gpg.ssh.allowedSignersFile", "/home/simon/.signers"},
 		{"commit.gpgsign", "true"},
 		{"tag.gpgsign", "true"},
 		// The "core" settings that describe a working tree.
@@ -190,12 +202,11 @@ func TestUnsafeKeyReason_RestrictsWhatItSaysItDoes(t *testing.T) {
 		{"protocol.version", "2"},
 		{"credential.useHttpPath", "true"},
 		{"trace2.eventBrief", "true"},
-		// The third category: a file git reads as data. None can cause
-		// execution or grant trust on its own, so each stays allowed
-		// deliberately, and this is where that decision is pinned.
+		// The third category: a file git reads as data. None grants trust
+		// or decides a verification, so each stays allowed deliberately,
+		// and this is where that decision is pinned.
 		{"core.attributesFile", "/home/simon/.gitattributes"},
 		{"core.excludesFile", "/home/simon/.gitignore"},
-		{"gpg.ssh.allowedSignersFile", "/home/simon/.signers"},
 		{"mailmap.file", "/home/simon/.mailmap"},
 		{"diff.orderFile", "/home/simon/.diff-order"},
 		{"blame.ignoreRevsFile", "/home/simon/.git-blame-ignore-revs"},
@@ -203,8 +214,6 @@ func TestUnsafeKeyReason_RestrictsWhatItSaysItDoes(t *testing.T) {
 		// Keys ending in "path" that name no path git resolves.
 		{"core.quotePath", "false"},
 		{"credential.useHttpPath", "true"},
-		{"fsck.gitmodulesPath", "warn"},
-		{"receive.gitmodulesPath", "warn"},
 		// Ordinary preferences.
 		{"init.defaultBranch", "main"},
 		{"pull.rebase", "true"},
@@ -258,6 +267,48 @@ func TestUnsafeKeyReason_RefusesAnIncludeForBeingAnInclude(t *testing.T) {
 		},
 		{"an alias, which a restricted section owns", "alias.ci", "!touch /tmp/marker", sectionReason},
 		{"a hooks path, which the suffix family owns", "core.hooksPath", "/home/simon/.githooks", suffixReason},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			why, ok := config.UnsafeKeyReason(tt.key, tt.value)
+			if !ok {
+				t.Fatalf("UnsafeKeyReason(%q, %q) allowed it, want it restricted", tt.key, tt.value)
+			}
+			if why != tt.want {
+				t.Errorf("UnsafeKeyReason(%q, %q) = %q, want %q", tt.key, tt.value, why, tt.want)
+			}
+		})
+	}
+}
+
+// TestUnsafeKeyReason_SaysWhichCategoryRefusedTheKey asserts the reason
+// each category gives, not only that the key is refused.
+//
+// A key in either category is refused either way, so the reason is the
+// whole of what a wrong category changes, and it is the part a person
+// acts on. A key that names no program may not be refused for naming
+// one: the reader would go looking for a command that is not there. The
+// suffix family's reason is asserted beside the others, so a reason that
+// matched everything fails the test rather than passing it.
+func TestUnsafeKeyReason_SaysWhichCategoryRefusedTheKey(t *testing.T) {
+	t.Parallel()
+
+	const (
+		trustReason  = "decides what git verifies, trusts, contacts or writes, rather than naming a command"
+		fsckReason   = "decides whether one of git's object checks still applies"
+		suffixReason = "names a command git runs, or a path git resolves one from"
+	)
+
+	for _, tt := range []struct{ name, key, value, want string }{
+		{"one half of a content filter", "filter.lfs.clean", "git-lfs clean", "names a program git runs for this filter"},
+		{"a submodule update command", "submodule.lib.update", "!/bin/sh", "names a program git runs for this submodule"},
+		{"a protection deciding what git writes", "core.protectNTFS", "false", trustReason},
+		{"the trust store an ssh signature is checked against", "gpg.ssh.allowedSignersFile", "/home/simon/.signers", trustReason},
+		{"a directory of CA certificates", "http.sslCAPath", "/tmp/ca", trustReason},
+		{"an address every request for a host goes to", "http.curloptResolve", "example.test:443:127.0.0.1", trustReason},
+		{"an object check severity", "fsck.missingEmail", "ignore", fsckReason},
+		{"an object check severity on the receiving side", "receive.fsck.missingEmail", "ignore", fsckReason},
+		{"a path git resolves a command from", "core.hooksPath", "/home/simon/.githooks", suffixReason},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
