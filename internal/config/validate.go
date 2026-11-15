@@ -377,7 +377,7 @@ var generatedGitKeys = sync.OnceValue(func() map[string]bool {
 	return keys
 })
 
-// UnsafeKeyReason reports whether key, carrying value, is one a profile
+// UnsafeKeyReason reports whether key is one a profile
 // may hold only when AllowUnsafeKeysKey names it, and returns the plain
 // reason. key need not be valid: an unparseable key is simply not
 // reported here, since ValidateProfileKey refuses it first.
@@ -404,7 +404,7 @@ var generatedGitKeys = sync.OnceValue(func() map[string]bool {
 // list, which is refused until the list is regenerated. That is a
 // refusal with a remedy printed next to it, and the remedy is the same
 // opt in, so the trade runs the safe way round.
-func UnsafeKeyReason(key, value string) (string, bool) {
+func UnsafeKeyReason(key string) (string, bool) {
 	section, _, name, err := SplitKey(key)
 	if err != nil {
 		return "", false
@@ -702,7 +702,7 @@ func validateProfileEntry(key, value string, allowed map[string]bool) error {
 	if err := ValidateProfileValue(value); err != nil {
 		return fmt.Errorf("key %q: %w", key, err)
 	}
-	why, unsafe := UnsafeKeyReason(key, value)
+	why, unsafe := UnsafeKeyReason(key)
 	if !unsafe {
 		return nil
 	}

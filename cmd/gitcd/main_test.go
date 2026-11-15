@@ -75,3 +75,37 @@ func TestRun_Help(t *testing.T) {
 		}
 	}
 }
+
+func TestRun_HelpRejectsWhatItDoesNotTake(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"help with an argument", []string{"help", "extra"}},
+		{"help with an unknown flag", []string{"help", "--bogus"}},
+		{"short flag with an argument", []string{"-h", "extra"}},
+		{"short flag with an unknown flag", []string{"-h", "--bogus"}},
+		{"long flag with an argument", []string{"--help", "extra"}},
+		{"long flag with an unknown flag", []string{"--help", "--bogus"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout, stderr bytes.Buffer
+			code := run(tt.args, &stdout, &stderr)
+
+			if code != 2 {
+				t.Fatalf("run(%v) = %d, want 2", tt.args, code)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("run(%v) wrote to stdout: %q", tt.args, stdout.String())
+			}
+			if stderr.Len() == 0 {
+				t.Fatalf("run(%v) wrote nothing to stderr, want the error and usage", tt.args)
+			}
+		})
+	}
+}

@@ -30,11 +30,12 @@ import (
 )
 
 // Result is one repository boundary Walk found under root, inspected
-// against cfg. Err is set, with Repo carrying only Path, when
-// profile.Inspect could not resolve the repository, most commonly because
-// it carries no "remote.origin.url" at all: Walk still reports it rather
-// than dropping it silently, so a caller can decide whether to skip it or
-// fail.
+// against cfg. Err is set, with Repo carrying only Path and IsWorktree,
+// when profile.Inspect could not resolve the repository, most commonly
+// because it carries no "remote.origin.url" at all: Walk still reports it
+// rather than dropping it silently, so a caller can decide whether to skip
+// it or fail. Its linked worktrees are discovered and reported all the
+// same.
 type Result struct {
 	Repo profile.Repo
 	Err  error
@@ -121,10 +122,17 @@ func inspectBoundary(ctx context.Context, path, root, resolvedRoot string, cfg c
 
 	repo, inspectErr := profile.Inspect(ctx, path, cfg, managedDir)
 	if inspectErr != nil {
-		*results = append(*results, Result{Repo: profile.Repo{Path: path}, Err: inspectErr})
-		return nil
+		// An uninspectable repository, most commonly one with no remote,
+		// still has linked worktrees git knows about, so they are looked
+		// for all the same. Inspect returns no Repo on failure, so the
+		// worktree flag is read from git directly, letting a caller keep
+		// filtering a linked worktree out the way it does for an
+		// inspectable one.
+		repo = profile.Repo{Path: path, IsWorktree: isLinkedWorktree(ctx, path)}
+		*results = append(*results, Result{Repo: repo, Err: inspectErr})
+	} else {
+		*results = append(*results, Result{Repo: repo})
 	}
-	*results = append(*results, Result{Repo: repo})
 
 	if repo.IsWorktree {
 		// A linked worktree shares its main checkout's registry: asking
@@ -136,6 +144,11 @@ func inspectBoundary(ctx context.Context, path, root, resolvedRoot string, cfg c
 
 	worktrees, err := git.Worktrees(ctx, path)
 	if err != nil {
+		if inspectErr != nil {
+			// The repository is already reported with its own error: a
+			// registry git cannot list adds nothing to fail the walk for.
+			return nil
+		}
 		return fmt.Errorf("scan: list the worktrees of %s: %w", path, err)
 	}
 	for _, worktree := range worktrees {
@@ -148,6 +161,21 @@ func inspectBoundary(ctx context.Context, path, root, resolvedRoot string, cfg c
 		}
 	}
 	return nil
+}
+
+// isLinkedWorktree reports whether path is a linked worktree, the same
+// test profile.Inspect applies: its git directory differs from the
+// common one. A path git cannot answer for reads as not a worktree.
+func isLinkedWorktree(ctx context.Context, path string) bool {
+	gitDir, err := git.Dir(ctx, path)
+	if err != nil {
+		return false
+	}
+	commonDir, err := git.CommonDir(ctx, path)
+	if err != nil {
+		return false
+	}
+	return gitDir != commonDir
 }
 
 // relocateUnderRoot reports whether worktree, a path git reported with any

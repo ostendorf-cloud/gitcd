@@ -84,12 +84,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "shell-init":
 		return runShellInit(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
-		fmt.Fprint(stdout, usage)
-		return 0
+		return runHelp(args[0], args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "gitcd: unknown command %q\n%s", args[0], usage)
 		return 2
 	}
+}
+
+// runHelp implements "gitcd help", "gitcd -h" and "gitcd --help": the usage
+// on stdout and exit 0. It takes no topic, no argument and no flag, like
+// every other command, so anything following the name is a usage error.
+func runHelp(name string, args []string, stdout, stderr io.Writer) int {
+	if len(args) != 0 {
+		fmt.Fprintf(stderr, "gitcd %s: no arguments or flags are accepted, got %q\n%s", name, args[0], usage)
+		return 2
+	}
+	fmt.Fprint(stdout, usage)
+	return 0
 }
 
 // newLogger builds the logger every command that does meaningful work

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -120,17 +121,11 @@ func openRepo(
 	ctx context.Context, stdout, stderr io.Writer, cfg config.Config, path string, printOnly bool,
 	launch func(context.Context, string) error,
 ) int {
-	remoteURL, err := git.RemoteURL(ctx, path)
+	url, err := webURL(ctx, cfg, path)
 	if err != nil {
 		fmt.Fprintf(stderr, "gitcd open: %v\n", err)
 		return 1
 	}
-	r, err := remote.Parse(remoteURL, cfg.AliasMap())
-	if err != nil {
-		fmt.Fprintf(stderr, "gitcd open: parse the remote of %s: %v\n", path, err)
-		return 1
-	}
-	url := r.WebURL()
 
 	if printOnly {
 		fmt.Fprintln(stdout, url)
@@ -143,6 +138,30 @@ func openRepo(
 	}
 	fmt.Fprintf(stderr, "gitcd open: opened %s\n", url)
 	return 0
+}
+
+// errNoRemoteToOpen is what "open" fails with for a repository, or a
+// worktree of one, that carries no "origin" remote: there is no web URL to
+// open.
+var errNoRemoteToOpen = errors.New("the repository has no remote to open")
+
+// webURL reads path's own origin remote and renders its web URL. A
+// repository with no origin remote fails with errNoRemoteToOpen: "git
+// config --get" exits 1 for an unset key.
+func webURL(ctx context.Context, cfg config.Config, path string) (string, error) {
+	remoteURL, err := git.RemoteURL(ctx, path)
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return "", fmt.Errorf("%s: %w", path, errNoRemoteToOpen)
+		}
+		return "", err
+	}
+	r, err := remote.Parse(remoteURL, cfg.AliasMap())
+	if err != nil {
+		return "", fmt.Errorf("parse the remote of %s: %w", path, err)
+	}
+	return r.WebURL(), nil
 }
 
 // launchBrowser opens url in the platform's own browser command: "open"
