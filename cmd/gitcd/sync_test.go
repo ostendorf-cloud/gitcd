@@ -38,6 +38,48 @@ func advanceBareRemote(t *testing.T, source, bare string) {
 	runGit(t, source, "push", bare, "HEAD:main")
 }
 
+// TestRunSync_FailingFetchDoesNotCarryARemoteCredential makes a real git
+// fetch fail against an unreachable host, with a credential in the remote
+// URL, and checks gitcd's own output with --verbose on.
+func TestRunSync_FailingFetchDoesNotCarryARemoteCredential(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "user and password", url: "https://user:FAKESECRET@127.0.0.1:1/acme/widget.git"},
+		{name: "slash and question mark in the password", url: "https://user:FAKE/SEC?RET@h.invalid/acme/widget.git"},
+		{name: "slash and number sign in the password", url: "https://user:FAKE/SEC#RET@h.invalid/acme/widget.git"},
+		{name: "slash in the password", url: "https://user:FAKE/SECRET@h.invalid/acme/widget.git"},
+		{name: "question mark in the password", url: "https://user:FAKE?SECRET@h.invalid/acme/widget.git"},
+		{name: "number sign in the password", url: "https://user:FAKE#SECRET@h.invalid/acme/widget.git"},
+		{name: "space in the password", url: "https://user:FAKE SECRET@h.invalid/acme/widget.git"},
+		{name: "tab in the password", url: "https://user:FAKE\tSECRET@h.invalid/acme/widget.git"},
+		{name: "slash in the user name", url: "https://FAKE/SECRET@h.invalid/acme/widget.git"},
+		{name: "question mark in the user name", url: "https://FAKE?SECRET@h.invalid/acme/widget.git"},
+		{name: "space in the user name", url: "https://FAKE SECRET@h.invalid/acme/widget.git"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := setupEnv(t)
+			repo := filepath.Join(home, "Code", "h.invalid", "acme", "widget")
+			initRepository(t, repo)
+			addRemote(t, repo, tt.url)
+
+			var stdout, stderr bytes.Buffer
+			code := run([]string{"sync", "--verbose"}, &stdout, &stderr)
+
+			if code == 0 {
+				t.Fatalf("sync = 0, want a failure for an unreachable remote, stderr: %s", stderr.String())
+			}
+			for _, part := range []string{"FAKE", "SEC", "RET"} {
+				if strings.Contains(stderr.String(), part) || strings.Contains(stdout.String(), part) {
+					t.Fatalf("sync output carries %q, stdout: %q, stderr: %q", part, stdout.String(), stderr.String())
+				}
+			}
+		})
+	}
+}
+
 func TestRunSync_FetchesEveryRepository(t *testing.T) {
 	home := setupEnv(t)
 	root := filepath.Join(home, "Code")

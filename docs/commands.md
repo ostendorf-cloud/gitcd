@@ -15,6 +15,24 @@ success, can be wrapped by the shell function `shell-init` emits without that fu
 seeing anything on stdout but the path itself. `--verbose` adds debug logging on stderr; it
 never changes what a command writes on stdout.
 
+## Remotes
+
+Every command that takes or reads a remote accepts an SSH or HTTPS URL, the scp style
+`git@host:owner/repo.git`, the Azure DevOps forms and the bare `host/owner/repo` shorthand.
+
+A credential in a URL's user name or password is never printed: gitcd replaces it with `***` in
+every log line, error and listing it writes. An error for a remote that cannot be parsed does
+not quote the remote at all. When the remote carries a credential, gitcd also withholds git's
+own output for it, from `clone` progress and from the errors of `clone` and `sync`, because git
+may repeat part of the credential outside any URL, such as in `Could not resolve host`; only the
+exit status is kept. Output git writes on its own, outside what gitcd captures, is not
+something gitcd can change, and `--verbose` does not change any of this.
+
+A remote with an `@` in its path, as in `https://host/acme/r3@v2.git`, is refused as ambiguous
+with a credential: the `@` cannot be told apart from the end of a password that holds a `/`.
+Write the `@` percent encoded as `%40`, as in `https://host/acme/r3%40v2.git`, and the remote
+parses to the same owner and repository name with the `@` in it.
+
 ## help
 
 `gitcd help`, `gitcd -h` and `gitcd --help` print the usage on stdout and exit 0. They take no
@@ -145,7 +163,11 @@ it detects every identity key, `user.name`, `user.email`, `user.signingkey`, `gp
 - `--verbose` enables debug logging on stderr.
 
 A move backs up both files it touches, the global git configuration and `~/.gitcd.yaml` (or its
-XDG fallback), before writing either, with the backup path printed on stdout. `init` refuses
+XDG fallback), before writing either, with the backup path printed on stdout. Both backups
+are created `0600`, named after the original plus a UTC timestamp with nanosecond resolution,
+so a second run does not collide with the first. A backup never overwrites anything: when a
+file already sits at the backup path, `init` stops with exit code `1` before it changes either
+original, and the run can be repeated. `init` refuses
 outright, before writing anything, when a global identity key already sits after the last
 existing `[include]` section: `git config --global --add` inserts a new key into that section
 rather than at the end of the file, and a key sitting after it would keep beating every
@@ -173,7 +195,10 @@ Exit codes:
 ## apply
 
 Renders every identity profile file and the include file `init` points the global git
-configuration at, then writes them.
+configuration at, then writes them. The managed directory is created `0700` and every file
+`0600`; an existing directory or file with a wider mode is tightened on the next run. On Windows these
+modes do not apply and access is governed by the ACLs the directory inherits from the user
+profile. See the [configuration reference](configuration.md).
 
 - `--dry-run` prints the rendered files instead of writing them.
 - `--verbose` enables debug logging on stderr.

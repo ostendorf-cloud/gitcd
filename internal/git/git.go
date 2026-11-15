@@ -16,6 +16,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/ostendorf-cloud/gitcd/internal/remote"
 )
 
 // Clone runs "git clone" from remoteURL into dest, creating dest's parent
@@ -26,6 +28,10 @@ import (
 // caller that prints the destination path there is never interleaved with
 // git's progress output. On failure, the progress already streamed to
 // progress is also folded into the returned error.
+//
+// When remoteURL carries a credential, git's output is neither streamed to
+// progress nor folded into the error: gitcd cannot redact what git prints
+// as it passes, and git may repeat part of the credential outside any URL.
 func Clone(ctx context.Context, remoteURL, dest string, progress io.Writer) error {
 	return CloneWithConfig(ctx, remoteURL, dest, nil, progress)
 }
@@ -48,8 +54,20 @@ func CloneWithConfig(ctx context.Context, remoteURL, dest string, config map[str
 	var captured bytes.Buffer
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Stderr = io.MultiWriter(progress, &captured)
+	// The remote, a pair pinned with "-c", or a rewrite rule in the
+	// configuration git reads anywhere may carry the credential.
+	withhold := carriesCredential(remoteURL) || configuredURLsCarryCredential(gitIn(ctx, "")) ||
+		configPairsCarryCredential(config)
+	if withhold {
+		// git's own output is not streamed either: it cannot be
+		// redacted as it passes, and may repeat part of the credential.
+		cmd.Stderr = &captured
+	}
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git: clone %s into %s: %w: %s", remoteURL, dest, err, strings.TrimSpace(captured.String()))
+		return fmt.Errorf(
+			"git: clone %s into %s: %w: %s",
+			remote.Redact(remoteURL), dest, err, foldOutput(captured.String(), withhold),
+		)
 	}
 	return nil
 }
