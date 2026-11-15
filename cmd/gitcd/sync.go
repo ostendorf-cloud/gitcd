@@ -8,9 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/git"
+	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
 	"github.com/ostendorf-cloud/gitcd/internal/gitsync"
 )
 
@@ -48,17 +50,29 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gitcd sync: %v\n", err)
 		return 1
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "gitcd sync: %v\n", err)
+		return 1
+	}
 
-	paths, err := discoverRepos(cfg.Root)
+	// Every worktree of one repository shares that repository's remote,
+	// so fetching one again would only repeat the exact same fetch: see
+	// scanRepositories's own doc comment for the rule this follows for
+	// every other command. Unlike "list", "cd" and "doctor", sync needs
+	// nothing profile.Inspect resolves to fetch a repository, only its
+	// own path, so one scanRepositories could not fully inspect is still
+	// fetched rather than dropped.
+	results, err := scanRepositories(ctx, cfg, gitconfig.Dir(home), false)
 	if err != nil {
 		fmt.Fprintf(stderr, "gitcd sync: search %s: %v\n", cfg.Root, err)
 		return 1
 	}
-	logger.Debug("discovered repositories", "root", cfg.Root, "count", len(paths))
+	logger.Debug("discovered repositories", "root", cfg.Root, "count", len(results))
 
-	repos := make([]gitsync.Repo, len(paths))
-	for i, path := range paths {
-		repos[i] = gitsync.Repo{Path: path, Name: repoName(cfg.Root, path)}
+	repos := make([]gitsync.Repo, len(results))
+	for i, res := range results {
+		repos[i] = gitsync.Repo{Path: res.Repo.Path, Name: repoName(cfg.Root, res.Repo.Path)}
 	}
 
 	if *dryRun {

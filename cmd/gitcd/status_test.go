@@ -177,6 +177,88 @@ func TestRunStatus_StrictExitsNonZeroWhenAnyRepositoryIsDirty(t *testing.T) {
 	}
 }
 
+// TestRunStatus_IncludesALinkedWorktreeAsItsOwnRow guards the worktree
+// visibility rule status settles on: a linked worktree carries its own
+// branch and its own dirty state, distinct from its main checkout's, so
+// it always gets its own row, even nested at the
+// "<repo>/.claude/worktrees/<branch>" layout this organisation's own
+// worktree convention produces, the one shape "status" could not see
+// before this command moved onto internal/scan.
+func TestRunStatus_IncludesALinkedWorktreeAsItsOwnRow(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+
+	main := filepath.Join(root, "github.com", "acme", "widget")
+	initRepository(t, main)
+	runGit(t, main, "remote", "add", "origin", "https://github.com/acme/widget.git")
+	worktree := filepath.Join(main, ".claude", "worktrees", "feat-x")
+	runGit(t, main, "worktree", "add", worktree, "-b", "feat-x")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"status"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("status = %d, want 0, stderr: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "main") {
+		t.Fatalf("status output is missing the main checkout's own row: %s", out)
+	}
+	if !strings.Contains(out, "feat-x") {
+		t.Fatalf("status output is missing a row for the linked worktree's own branch %q: %s", "feat-x", out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("status output has %d lines, want 3 (the header, the main checkout and the worktree): %s", len(lines), out)
+	}
+}
+
+// TestRunStatus_OrdersRowsByNameNotByWalkOrder guards the Should finding
+// on pull request #23: the deleted discoverRepos sorted its own results,
+// and status now relies on scanRepositories to do the same rather than
+// on scan.Walk's own order, which is the order git reports a repository's
+// worktrees in, not necessarily that repository's name among its
+// siblings. "widget"'s own worktree is registered under "other/standalone"
+// here, not nested under "widget" itself, exactly the case the review
+// found nothing in the code guaranteed: scan.Walk reports it the moment
+// "acme/widget" is found, before it ever reaches "acme2/middle", so
+// without an explicit sort "other/standalone" would print first even
+// though "acme2/middle" sorts before it by name.
+func TestRunStatus_OrdersRowsByNameNotByWalkOrder(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+
+	widget := filepath.Join(root, "acme", "widget")
+	initRepository(t, widget)
+	runGit(t, widget, "remote", "add", "origin", "https://github.com/acme/widget.git")
+
+	middle := filepath.Join(root, "acme2", "middle")
+	initRepository(t, middle)
+	runGit(t, middle, "remote", "add", "origin", "https://github.com/acme2/middle.git")
+
+	standalone := filepath.Join(root, "other", "standalone")
+	runGit(t, widget, "worktree", "add", standalone, "-b", "feat-y")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"status"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("status = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	out := stdout.String()
+	middleIdx := strings.Index(out, "acme2/middle")
+	standaloneIdx := strings.Index(out, "other/standalone")
+	if middleIdx == -1 {
+		t.Fatalf("status output is missing a row for %q: %s", "acme2/middle", out)
+	}
+	if standaloneIdx == -1 {
+		t.Fatalf("status output is missing a row for %q: %s", "other/standalone", out)
+	}
+	if middleIdx > standaloneIdx {
+		t.Fatalf("status printed %q before %q, want name order (%q before %q): %s",
+			"other/standalone", "acme2/middle", "acme2/middle", "other/standalone", out)
+	}
+}
+
 func TestRunStatus_NoRepositoriesIsNotAFailure(t *testing.T) {
 	setupEnv(t)
 

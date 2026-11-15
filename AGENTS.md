@@ -27,15 +27,19 @@ not repeated here.
 - `internal/doctor/`: detects identity drift, a repository at a path the layout would not
   render, a missing or stale managed file and a global identity key. Detection only; the
   command layer writes.
-- `internal/scan/`: walks the configured root into the repository values `list` and `cd`
-  consume, stopping at a repository boundary, a `.git` entry, file or directory alike, and
-  asking git for the linked worktrees that boundary skips past.
+- `internal/scan/`: the one walk over the configured root every command that takes a
+  repository query consumes, stopping at a repository boundary, a `.git` entry, file or
+  directory alike, and asking git for the linked worktrees that boundary skips past.
 - `internal/shell/`: the per shell init snippet `shell-init` prints, including the `cd` tab
   completion registered for zsh and fish.
 
-Two walks over the configured root still exist: `cmd/gitcd/discover.go` serves `status`, `sync`,
-`open` and `doctor`, while `internal/scan` serves `list` and `cd` with a richer value and finds
-linked worktrees the other does not. Issue #15 reconciles them into one.
+Whether a linked worktree counts as one of the repositories a command reports is a single,
+stated rule, not a separate choice per command: `cmd/gitcd/repos.go`'s `scanRepositories` doc
+comment names it. `list` hides a worktree unless `--worktrees` is given; `cd`, `path` and
+`open` resolve a query to one just as readily as to its main checkout; `status` gives one its
+own row, since its branch and dirty state are its own; `sync` and `doctor` skip one, since it
+shares its main checkout's remote and git configuration and checking or fetching it again
+would only repeat that pass.
 
 ## Commands
 

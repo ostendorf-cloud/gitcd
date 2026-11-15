@@ -36,13 +36,15 @@ type doctorOutput struct {
 // runDoctor implements "gitcd doctor": every per repository check under
 // the configured root, plus the managed file and global git
 // configuration checks, reported as one finding per problem. The walk
-// itself is discoverRepos, the same one "status" and "sync" already use:
-// issue #3's internal/scan, built for "list" and "adopt" with a richer
-// repository value, lands separately and the two walks are reconciled
-// once both exist, per AGENTS.md. A repository reachable only through a
-// "hasconfig" rule, outside root, is not found by this walk and so is
-// not checked; internal/doctor's own doc comment and docs/concepts/gitcd.md's
-// open question about "list" cover the same gap for the same reason.
+// itself is scanRepositories, the same one every other fleet wide
+// command uses; a linked worktree is excluded from it here, since it
+// shares its main checkout's remote and local git configuration and so
+// would only repeat the very same checks: see scanRepositories's own doc
+// comment for the rule this follows for every other command. A
+// repository reachable only through a "hasconfig" rule, outside root, is
+// not found by this walk and so is not checked; internal/doctor's own
+// doc comment and docs/concepts/gitcd.md's open question about "list"
+// cover the same gap for the same reason.
 //
 // "--fix" repairs only what is mechanical: a stale or missing managed
 // file (re-rendered, exactly as "gitcd apply" would), and a path that
@@ -126,20 +128,22 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 }
 
 // collectFindings runs every check doctor performs: one pass over
-// discoverRepos's walk of cfg.Root, the ancestor case conflict check that
-// pass also makes possible, the managed file comparison, and the global
-// git configuration checks.
+// scanRepositories's walk of cfg.Root, excluding a linked worktree, the
+// ancestor case conflict check that pass also makes possible, the
+// managed file comparison, and the global git configuration checks.
 func collectFindings(ctx context.Context, cfg config.Config, home string, logger *slog.Logger, stderr io.Writer) ([]doctor.Finding, error) {
 	var findings []doctor.Finding
 
-	paths, err := discoverRepos(cfg.Root)
+	results, err := scanRepositories(ctx, cfg, gitconfig.Dir(home), false)
 	if err != nil {
 		return nil, fmt.Errorf("search %s: %w", cfg.Root, err)
 	}
-	logger.Debug("discovered repositories", "root", cfg.Root, "count", len(paths))
+	results = keepInspectable(results, logger)
+	logger.Debug("discovered repositories", "root", cfg.Root, "count", len(results))
 
 	var repoPaths []doctor.RepoPath
-	for _, path := range paths {
+	for _, res := range results {
+		path := res.Repo.Path
 		name := repoName(cfg.Root, path)
 		repoFindings, err := doctor.CheckRepo(ctx, cfg, home, name, path)
 		if err != nil {

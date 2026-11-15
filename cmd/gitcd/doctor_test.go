@@ -55,6 +55,40 @@ rules:
 	}
 }
 
+// TestRunDoctor_ExcludesALinkedWorktreeFromPerRepositoryChecks guards the
+// worktree visibility rule doctor settles on: a linked worktree shares
+// its main checkout's remote and local git configuration, so checking it
+// again would only repeat the same identity checks, and its own path,
+// nested at "<repo>/.claude/worktrees/<branch>", is never one the
+// configured layout would render, so checking its path at all would
+// report a bogus mismatch for a location a worktree is never expected to
+// sit at. Probing confirmed the premise directly: a "gitdir" rule
+// matches a linked worktree exactly the same as its main checkout, since
+// the worktree's own git directory always nests under the main
+// checkout's own path, so no identity check could ever tell the two
+// apart in the first place.
+func TestRunDoctor_ExcludesALinkedWorktreeFromPerRepositoryChecks(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+
+	main := filepath.Join(root, "github.com", "acme", "widget")
+	initRepository(t, main)
+	runGit(t, main, "remote", "add", "origin", "https://github.com/acme/widget.git")
+	worktree := filepath.Join(main, ".claude", "worktrees", "feat-x")
+	runGit(t, main, "worktree", "add", worktree, "-b", "feat-x")
+
+	var stdout, stderr bytes.Buffer
+	run([]string{"doctor"}, &stdout, &stderr)
+	out := stdout.String()
+	if strings.Contains(out, worktree) {
+		t.Fatalf(
+			"doctor stdout = %q, want no finding naming the linked worktree %s: it must never be checked on its own",
+			out, worktree,
+		)
+	}
+}
+
 func TestRunDoctor_NoRepositoriesAndNoManagedFilesNeededIsStillNonZeroOnAGlobalIdentityKey(t *testing.T) {
 	// setupEnv itself sets a global user.name and user.email, exactly
 	// the finding doctor exists to report: with no profiles configured
