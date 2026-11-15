@@ -51,8 +51,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	switch args[0] {
 	case "version":
-		fmt.Fprintln(stdout, Version)
-		return 0
+		return runVersion(args[1:], stdout, stderr)
 	case "clone":
 		return runClone(args[1:], stdout, stderr)
 	case "path":
