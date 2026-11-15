@@ -335,6 +335,31 @@ func TestClone_WithACredentialStreamsNothingFromGit(t *testing.T) {
 	}
 }
 
+// TestClone_AzureDevOpsOrganisationUserFailsClosed clones the Azure DevOps
+// HTTPS form, whose URL user is the organisation. gitcd cannot tell it from
+// a token as a user name, so git's progress is not streamed and its output
+// is withheld; the URL in the error shows "***" for the user.
+func TestClone_AzureDevOpsOrganisationUserFailsClosed(t *testing.T) {
+	setupGitEnv(t)
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	remoteURL := "https://ORG@dev.azure.com/ORG/PROJECT/_git/REPO"
+	// Redirects the URL to a path that does not exist, so no network is used.
+	config := map[string]string{"url.file://" + missing + ".insteadOf": remoteURL}
+	var progress bytes.Buffer
+	err := git.CloneWithConfig(context.Background(), remoteURL, filepath.Join(t.TempDir(), "dest"), config, &progress)
+	if err == nil {
+		t.Fatal("CloneWithConfig() succeeded, want a failure")
+	}
+	if progress.Len() != 0 {
+		t.Fatalf("progress = %q, want git's output withheld", progress.String())
+	}
+	if !strings.Contains(err.Error(), "https://***@dev.azure.com/ORG/PROJECT/_git/REPO") ||
+		!strings.Contains(err.Error(), "withheld") {
+		t.Fatalf("CloneWithConfig() error = %v, want the masked URL and withheld output", err)
+	}
+}
+
 func TestRemoteURL(t *testing.T) {
 	setupGitEnv(t)
 
