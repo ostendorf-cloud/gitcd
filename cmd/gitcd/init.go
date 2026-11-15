@@ -222,7 +222,11 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // the same absolute path for a given home directory, and that path is
 // distinctive enough on its own.
 func alreadyIncluded(content []byte, includePath string) bool {
-	return len(content) > 0 && strings.Contains(string(content), includePath)
+	// git doubles every backslash it writes into a file, so a Windows path
+	// only appears there in its escaped form.
+	escaped := strings.ReplaceAll(includePath, `\`, `\\`)
+	return len(content) > 0 &&
+		(strings.Contains(string(content), includePath) || strings.Contains(string(content), escaped))
 }
 
 // reportGlobalIdentityKeys prints every key found, its value, and the

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/ostendorf-cloud/gitcd/internal/shell"
+	"github.com/ostendorf-cloud/gitcd/internal/testenv"
 )
 
 // pwshBinary is the real PowerShell 7 executable mise installed under
@@ -69,7 +70,7 @@ func TestShellWrapper_ExecutesInPowerShell(t *testing.T) {
 	// uses: git itself rewrites it to the local source before ever
 	// touching the network, so the clone this test drives through the
 	// PowerShell wrapper never leaves the machine either.
-	runGit(t, home, "config", "--global", "url.file://"+source+".insteadOf", cloneURL)
+	runGit(t, home, "config", "--global", "url."+testenv.FileURL(source)+".insteadOf", cloneURL)
 
 	scriptPath := filepath.Join(t.TempDir(), "init.ps1")
 	writeFile(t, scriptPath, shell.PowerShell()+pwshHarness(cloneURL))
@@ -105,6 +106,14 @@ func TestShellWrapper_ExecutesInPowerShell(t *testing.T) {
 		{"CD_COMPLETIONS", "widget"},
 		{"STATUS_COMPLETION_COUNT", "0"},
 	} {
+		if want.key == "DRYRUN_OUT" || want.key == "CLONE_CWD" {
+			// A path: the same directory can be spelled with a short
+			// (8.3) or a long name on Windows.
+			if !samePath(got[want.key], want.value) {
+				t.Errorf("%s = %q, want %q (full powershell output:\n%s)", want.key, got[want.key], want.value, out)
+			}
+			continue
+		}
 		if got[want.key] != want.value {
 			t.Errorf("%s = %q, want %q (full powershell output:\n%s)", want.key, got[want.key], want.value, out)
 		}

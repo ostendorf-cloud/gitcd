@@ -17,6 +17,7 @@ import (
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/layout"
 	"github.com/ostendorf-cloud/gitcd/internal/remote"
+	"github.com/ostendorf-cloud/gitcd/internal/testenv"
 )
 
 // withHome points HOME, and XDG_CONFIG_HOME at a fresh subdirectory of it,
@@ -25,7 +26,7 @@ import (
 func withHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	return home
 }
@@ -637,7 +638,8 @@ func TestLoad_Root(t *testing.T) {
 	}
 
 	t.Run("an ordinary root, a space and a non-ASCII name included, is accepted", func(t *testing.T) {
-		for _, root := range []string{"~/Code", "/tmp/My Code", "/tmp/Código", "~"} {
+		base := filepath.ToSlash(t.TempDir())
+		for _, root := range []string{"~/Code", base + "/My Code", base + "/Código", "~"} {
 			home := withHome(t)
 			writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+strconv.Quote(root)+"\n")
 

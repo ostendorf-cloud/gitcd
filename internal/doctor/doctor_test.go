@@ -14,6 +14,7 @@ import (
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/doctor"
 	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
+	"github.com/ostendorf-cloud/gitcd/internal/testenv"
 )
 
 // setupGitEnv isolates every git invocation a test makes from the real
@@ -29,7 +30,7 @@ func setupGitEnv(t *testing.T) string {
 	if err := os.WriteFile(globalConfig, []byte("[user]\n\tname = Test User\n\temail = global-fallback-identity\n"), 0o644); err != nil {
 		t.Fatalf("write %s: %v", globalConfig, err)
 	}
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	return home
@@ -283,12 +284,12 @@ func TestCheckAncestorCaseConflicts(t *testing.T) {
 			{Repo: "github.com/Acme/widget", Path: "/code/github.com/Acme/widget", Want: "/code/github.com/acme/widget"},
 			{Repo: "github.com/Acme/other", Path: "/code/github.com/Acme/other", Want: "/code/github.com/Acme/other"},
 		}
-		findings := doctor.CheckAncestorCaseConflicts(repos)
+		findings := doctor.CheckAncestorCaseConflicts(nativePaths(repos))
 		f, ok := findKind(findings, doctor.KindAncestorCaseConflict)
 		if !ok {
 			t.Fatalf("CheckAncestorCaseConflicts() = %+v, want a %s finding", findings, doctor.KindAncestorCaseConflict)
 		}
-		if f.Path != "/code/github.com/Acme" {
+		if f.Path != filepath.FromSlash("/code/github.com/Acme") {
 			t.Fatalf("finding Path = %q, want the shared ancestor %q", f.Path, "/code/github.com/Acme")
 		}
 		if !strings.Contains(f.Message, "github.com/Acme/widget") || !strings.Contains(f.Message, "github.com/Acme/other") {
@@ -302,7 +303,7 @@ func TestCheckAncestorCaseConflicts(t *testing.T) {
 			{Repo: "github.com/Acme/widget", Path: "/code/github.com/Acme/widget", Want: "/code/github.com/acme/widget"},
 			{Repo: "github.com/Acme/gadget", Path: "/code/github.com/Acme/gadget", Want: "/code/github.com/acme/gadget"},
 		}
-		findings := doctor.CheckAncestorCaseConflicts(repos)
+		findings := doctor.CheckAncestorCaseConflicts(nativePaths(repos))
 		if len(findings) != 0 {
 			t.Fatalf("CheckAncestorCaseConflicts() = %+v, want no findings for an ancestor both repositories agree on", findings)
 		}
@@ -313,7 +314,7 @@ func TestCheckAncestorCaseConflicts(t *testing.T) {
 		repos := []doctor.RepoPath{
 			{Repo: "github.com/Acme/widget", Path: "/code/github.com/Acme/widget", Want: "/code/github.com/acme/widget"},
 		}
-		findings := doctor.CheckAncestorCaseConflicts(repos)
+		findings := doctor.CheckAncestorCaseConflicts(nativePaths(repos))
 		if len(findings) != 0 {
 			t.Fatalf("CheckAncestorCaseConflicts() = %+v, want no findings with no sibling repository", findings)
 		}
@@ -325,7 +326,7 @@ func TestCheckAncestorCaseConflicts(t *testing.T) {
 			{Repo: "github.com/Acme/widget", Path: "/code/github.com/Acme/widget", Want: "/code/github.com/acme/widget"},
 			{Repo: "github.com/Acme/other", Path: "/code/github.com/Acme/other", Want: "/code/github.com/Acme/other"},
 		}
-		findings := doctor.CheckAncestorCaseConflicts(repos)
+		findings := doctor.CheckAncestorCaseConflicts(nativePaths(repos))
 		if _, ok := findKind(findings, doctor.KindAncestorCaseConflict); !ok {
 			t.Fatalf("CheckAncestorCaseConflicts() = %+v, want a conflict finding", findings)
 		}

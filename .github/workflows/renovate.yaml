@@ -1,0 +1,29 @@
+name: renovate
+
+# Thin, per-repository trigger for this repository's own Renovate run. The shared reusable
+# workflow runs self-hosted Renovate with a token scoped to this repository. The "edited"
+# triggers let a ticked rebase checkbox on the Dependency Dashboard or on a Renovate pull
+# request react within one run instead of waiting for the next schedule tick. The anti-loop
+# condition lives inside the reusable workflow, so this caller needs none.
+on:
+  # Off-peak, staggered away from the other repositories' schedules.
+  schedule:
+    - cron: "46 4 * * *"
+  workflow_dispatch:
+  issues:
+    types: [edited]
+  pull_request:
+    types: [edited]
+
+# The caller declares triggers only. The Renovate run gets its permissions from the token the
+# reusable workflow mints for itself, not from this workflow's GITHUB_TOKEN.
+permissions:
+  contents: read
+
+jobs:
+  renovate:
+    uses: ostendorf-cloud/workflows/.github/workflows/reusable-renovate.yaml@a798b963d20b239bec48c101af965e08fac36146  # v0.3.0
+    # The one secret the reusable workflow declares. The app id is a variable and needs no
+    # forwarding.
+    secrets:
+      GH_APP_DEPENDENCIES_PRIVATE_KEY: ${{ secrets.GH_APP_DEPENDENCIES_PRIVATE_KEY }}

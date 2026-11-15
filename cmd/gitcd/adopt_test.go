@@ -406,6 +406,7 @@ func TestRunAdopt_MkdirAllFailureLeavesNoDirectoryBehind(t *testing.T) {
 }
 
 func TestRunAdopt_TreatsAnUncheckableTargetAsAConflict(t *testing.T) {
+	skipWithoutUnixModes(t)
 	home := setupEnv(t)
 	root := filepath.Join(home, "Code")
 	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")

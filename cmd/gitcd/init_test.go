@@ -43,7 +43,7 @@ func TestRunInit_AddsOneIncludeLineAfterABackup(t *testing.T) {
 		t.Fatalf("read %s: %v", globalPath, err)
 	}
 	includePath := filepath.Join(home, ".config", "gitcd", "includes.gitconfig")
-	if !strings.Contains(string(after), includePath) {
+	if !strings.Contains(string(after), gitConfigEscaped(includePath)) {
 		t.Fatalf("global config after init = %q, want it to include %q", after, includePath)
 	}
 
@@ -180,7 +180,7 @@ func TestRunInit_ReportsGlobalIdentityKeysWithoutMovingByDefault(t *testing.T) {
 	// The include line is still added: reporting a leaked identity key
 	// must not block the rest of "init" from doing its ordinary job.
 	includePath := filepath.Join(home, ".config", "gitcd", "includes.gitconfig")
-	if !strings.Contains(string(after), includePath) {
+	if !strings.Contains(string(after), gitConfigEscaped(includePath)) {
 		t.Fatalf("global config after init = %q, want it to include %q", after, includePath)
 	}
 
@@ -676,9 +676,7 @@ func TestRunInit_DoesNotFollowAPreexistingSymlinkAtTheValidationTempPath(t *test
 	writeFile(t, canary, "do not touch\n")
 
 	legacyTmpPath := cfgPath + ".gitcd-validate-tmp"
-	if err := os.Symlink(canary, legacyTmpPath); err != nil {
-		t.Fatalf("symlink %s -> %s: %v", legacyTmpPath, canary, err)
-	}
+	symlinkOrSkip(t, canary, legacyTmpPath)
 
 	var stdout, stderr bytes.Buffer
 	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
@@ -724,9 +722,7 @@ func TestRunInit_WritesThroughASymlinkedGitcdYAMLRatherThanReplacingIt(t *testin
 	writeFile(t, dotfilesCopy, "profiles:\n  work:\n    user.email: work@example.test\n")
 
 	cfgPath := filepath.Join(home, ".gitcd.yaml")
-	if err := os.Symlink(dotfilesCopy, cfgPath); err != nil {
-		t.Fatalf("symlink %s -> %s: %v", cfgPath, dotfilesCopy, err)
-	}
+	symlinkOrSkip(t, dotfilesCopy, cfgPath)
 
 	var stdout, stderr bytes.Buffer
 	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
@@ -902,6 +898,7 @@ func TestIdentityKeysLanded(t *testing.T) {
 // the process umask, so this assertion holds regardless of what umask
 // the test happens to run under.
 func TestRunInit_PreservesAnExistingConfigFileMode(t *testing.T) {
+	skipWithoutUnixModes(t)
 	home := setupEnv(t)
 	cfgPath := filepath.Join(home, ".gitcd.yaml")
 	writeFile(t, cfgPath, "profiles:\n  work:\n    user.email: work@example.test\nrules:\n  - host: github.com\n    profile: work\n")
@@ -958,6 +955,7 @@ func TestRunInit_PreservesAWideConfigFileModeSilently(t *testing.T) {
 // mode that must be preserved is the symlink target's own, set here to
 // 0o600, not whatever the link itself reports.
 func TestRunInit_PreservesConfigModeThroughASymlink(t *testing.T) {
+	skipWithoutUnixModes(t)
 	home := setupEnv(t)
 	dotfilesCopy := filepath.Join(home, "dotfiles", "gitcd.yaml")
 	writeFile(t, dotfilesCopy, "profiles:\n  work:\n    user.email: work@example.test\n")
@@ -966,9 +964,7 @@ func TestRunInit_PreservesConfigModeThroughASymlink(t *testing.T) {
 	}
 
 	cfgPath := filepath.Join(home, ".gitcd.yaml")
-	if err := os.Symlink(dotfilesCopy, cfgPath); err != nil {
-		t.Fatalf("symlink %s -> %s: %v", cfgPath, dotfilesCopy, err)
-	}
+	symlinkOrSkip(t, dotfilesCopy, cfgPath)
 
 	var stdout, stderr bytes.Buffer
 	code := runInit([]string{"--move-identity=yes"}, strings.NewReader(""), &stdout, &stderr)
@@ -1001,6 +997,7 @@ func TestRunInit_PreservesConfigModeThroughASymlink(t *testing.T) {
 // docs/adr/0002-config-write-preserves-file-mode.md, rather than whatever
 // mode os.CreateTemp or an old hardcoded chmod happened to leave it at.
 func TestRunInit_CreatesANewConfigFileWithTheDefaultMode(t *testing.T) {
+	skipWithoutUnixModes(t)
 	home := setupEnv(t)
 	cfgPath := filepath.Join(home, ".gitcd.yaml")
 

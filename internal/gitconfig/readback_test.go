@@ -14,6 +14,7 @@ import (
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
+	"github.com/ostendorf-cloud/gitcd/internal/testenv"
 )
 
 // isolateGit points every path and lookup git would otherwise take from
@@ -23,7 +24,7 @@ import (
 func isolateGit(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testenv.SetHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, ".gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
@@ -212,7 +213,7 @@ func TestRender_IncludeFileRefusesARuleItCannotRenderLiterally(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := config.Config{
-				Root:    "/home/simon/Code",
+				Root:    rootDir,
 				Default: "{host}/{owner}/{repo}",
 				Profiles: map[string]config.Profile{
 					"private": {"user.email": "simon@example.test"},
@@ -220,7 +221,7 @@ func TestRender_IncludeFileRefusesARuleItCannotRenderLiterally(t *testing.T) {
 				Rules: []config.Rule{tt.rule},
 			}
 
-			if _, err := gitconfig.Render(cfg, "/home/simon"); err == nil {
+			if _, err := gitconfig.Render(cfg, homeDir); err == nil {
 				t.Fatal("Render() rendered a rule whose fields cannot be written into a condition literally, want an error")
 			}
 		})
@@ -237,9 +238,9 @@ func TestRender_IncludeFileRefusesARuleItCannotRenderLiterally(t *testing.T) {
 func TestRender_ConditionsStayScopedToWhatTheRuleNames(t *testing.T) {
 	isolateGit(t)
 
-	const (
-		home = "/home/simon"
-		root = "/home/simon/Code"
+	var (
+		home = homeDir
+		root = rootDir
 	)
 
 	tests := []struct {
@@ -281,7 +282,7 @@ func TestRender_ConditionsStayScopedToWhatTheRuleNames(t *testing.T) {
 				}
 				switch {
 				case strings.HasPrefix(condition, "gitdir/i:"):
-					if !strings.HasPrefix(strings.TrimPrefix(condition, "gitdir/i:"), root+"/") {
+					if !strings.HasPrefix(strings.TrimPrefix(condition, "gitdir/i:"), filepath.ToSlash(root)+"/") {
 						t.Errorf("the include file carries the condition %q, want one rooted at %q", condition, root)
 					}
 				case strings.HasPrefix(condition, "hasconfig:"):
@@ -317,7 +318,7 @@ func listKeys(t *testing.T, path string) []string {
 }
 
 func TestRender_PathsStayUnderTheManagedDirectory(t *testing.T) {
-	home := "/home/simon"
+	home := homeDir
 	managed := gitconfig.Dir(home) + string(filepath.Separator)
 
 	tests := []struct {
@@ -333,7 +334,7 @@ func TestRender_PathsStayUnderTheManagedDirectory(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := config.Config{
-				Root:     "/home/simon/Code",
+				Root:     rootDir,
 				Default:  "{host}/{owner}/{repo}",
 				Profiles: map[string]config.Profile{tt.profileName: {"user.email": "simon@example.test"}},
 				Rules:    []config.Rule{{Host: "github.com", Profile: tt.profileName}},
@@ -355,7 +356,7 @@ func TestRender_PathsStayUnderTheManagedDirectory(t *testing.T) {
 
 	t.Run("an ordinary name renders inside it", func(t *testing.T) {
 		cfg := config.Config{
-			Root:     "/home/simon/Code",
+			Root:     rootDir,
 			Default:  "{host}/{owner}/{repo}",
 			Profiles: map[string]config.Profile{"work.eu_2": {"user.email": "simon@example.test"}},
 			Rules:    []config.Rule{{Host: "github.com", Profile: "work.eu_2"}},
@@ -375,7 +376,7 @@ func TestRender_IncludeFileNamesOnlyTheConfiguredProfilePaths(t *testing.T) {
 	isolateGit(t)
 
 	cfg := config.Config{
-		Root:          "/home/simon/Code",
+		Root:          rootDir,
 		Default:       "{host}/{owner}/{repo}",
 		UseConfigOnly: true,
 		Profiles: map[string]config.Profile{
@@ -386,12 +387,12 @@ func TestRender_IncludeFileNamesOnlyTheConfiguredProfilePaths(t *testing.T) {
 		},
 	}
 
-	rendered, err := gitconfig.Render(cfg, "/home/simon")
+	rendered, err := gitconfig.Render(cfg, homeDir)
 	if err != nil {
 		t.Fatalf("Render() returned an unexpected error: %v", err)
 	}
 
-	path := writeIfRendered(t, rendered[gitconfig.IncludePath("/home/simon")])
+	path := writeIfRendered(t, rendered[gitconfig.IncludePath(homeDir)])
 
 	// Every path the include file points at, whatever condition it sits
 	// under, has to be a profile file gitcd itself renders, and the only
@@ -405,7 +406,7 @@ func TestRender_IncludeFileNamesOnlyTheConfiguredProfilePaths(t *testing.T) {
 		t.Fatalf("git config --file %s --list: %v: %s", path, err, out)
 	}
 
-	wantPath := gitconfig.ProfilePath("/home/simon", "private")
+	wantPath := gitconfig.ProfilePath(homeDir, "private")
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
 		key, value, _ := strings.Cut(line, "=")
 		switch {
