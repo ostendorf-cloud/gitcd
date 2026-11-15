@@ -14,6 +14,7 @@ import (
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
+	"github.com/ostendorf-cloud/gitcd/internal/remote"
 )
 
 // listEntry is one repository "gitcd list" reports, the same shape for
@@ -96,7 +97,7 @@ func listEntries(ctx context.Context, cfg config.Config, managedDir string, with
 	for _, res := range results {
 		entries = append(entries, listEntry{
 			Path:     res.Repo.Path,
-			Remote:   res.Repo.RemoteURL,
+			Remote:   remote.Redact(res.Repo.RemoteURL),
 			Worktree: res.Repo.IsWorktree,
 		})
 	}

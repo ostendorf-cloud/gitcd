@@ -10,6 +10,7 @@
 package remote
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -38,6 +39,21 @@ type Remote struct {
 	Repo    string
 }
 
+var (
+	// ErrMalformedURL is returned for a URL net/url cannot parse. Parse
+	// errors never quote any part of the input, since a failed parse
+	// cannot tell a credential from the rest of it.
+	ErrMalformedURL = errors.New("the remote is not a valid URL")
+	// ErrAmbiguousUserinfo is returned for a URL with an "@" after its
+	// authority that has no userinfo of its own, as in a path
+	// "/acme/r3@v2.git". The "@" cannot be told apart from the end of a
+	// credential that holds a "/", so the remote is refused. Writing the
+	// "@" percent encoded, as %40, makes it parse.
+	ErrAmbiguousUserinfo = errors.New(
+		"the remote has an @ outside a user name, which cannot be told apart from a credential: write it percent encoded as %40",
+	)
+)
+
 // Parse resolves input into a Remote. aliases maps a lowercased host alias
 // to the lowercased canonical host it stands for; a nil or empty map
 // disables alias resolution and every host is used as written, lowercased.
@@ -52,7 +68,7 @@ func Parse(input string, aliases map[string]string) (Remote, error) {
 		return Remote{}, err
 	}
 	if rawHost == "" {
-		return Remote{}, fmt.Errorf("remote: %q has no host", trimmed)
+		return Remote{}, fmt.Errorf("remote: the remote has no host")
 	}
 
 	rawHostLower := strings.ToLower(rawHost)
@@ -69,11 +85,11 @@ func Parse(input string, aliases map[string]string) (Remote, error) {
 		if sshForm {
 			segments = segments[1:]
 		}
-		return parseAzure(host, segments, sshForm, IsShorthand(trimmed), trimmed)
+		return parseAzure(host, segments, sshForm, IsShorthand(trimmed))
 	}
 
 	if len(segments) < 2 {
-		return Remote{}, fmt.Errorf("remote: %q has no owner and repository", trimmed)
+		return Remote{}, fmt.Errorf("remote: the remote has no owner and repository")
 	}
 	repo := segments[len(segments)-1]
 	owner := strings.Join(segments[:len(segments)-1], "/")
@@ -141,9 +157,23 @@ func (r Remote) WebURL() string {
 // "host/path" shorthand. It does not resolve aliases or interpret the path.
 func classify(input string) (host, path string, err error) {
 	if strings.Contains(input, "://") {
+		// The error url.Parse returns quotes parts of the input, so it is
+		// replaced by a fixed one instead of being passed on.
 		u, perr := url.Parse(input)
 		if perr != nil {
-			return "", "", fmt.Errorf("remote: parse %q: %w", input, perr)
+			return "", "", fmt.Errorf("remote: %w", ErrMalformedURL)
+		}
+		// Redact reads an "@" after the authority as userinfo, a "/"
+		// inside a credential included. When Go's own parse found no
+		// userinfo but Redact did, the input is one of those shapes and
+		// url.Parse took the credential for the host or the path. It is
+		// refused, not parsed, so the credential never becomes a host
+		// that later shows up in a path or an error.
+		// Any "@" counts, one in a query or fragment too: a user name
+		// holding a "?" would otherwise parse with its first part as the
+		// host.
+		if u.User == nil && strings.Contains(input, "@") {
+			return "", "", fmt.Errorf("remote: %w", ErrAmbiguousUserinfo)
 		}
 		return u.Hostname(), u.Path, nil
 	}
@@ -159,7 +189,7 @@ func classify(input string) (host, path string, err error) {
 	}
 
 	if slash == -1 {
-		return "", "", fmt.Errorf("remote: %q is not a recognised remote", input)
+		return "", "", fmt.Errorf("remote: not a recognised remote")
 	}
 	return input[:slash], input[slash+1:], nil
 }
@@ -208,10 +238,10 @@ func isAzureDevOps(host, rawHost string) bool {
 // HTTPS shapes apart otherwise: without it, a path three segments long is
 // malformed rather than guessed at as SSH shaped, unless it was the
 // shorthand to begin with.
-func parseAzure(host string, segments []string, sshForm, shorthand bool, input string) (Remote, error) {
+func parseAzure(host string, segments []string, sshForm, shorthand bool) (Remote, error) {
 	if sshForm {
 		if len(segments) != 3 {
-			return Remote{}, fmt.Errorf("remote: %q is not a recognised Azure DevOps SSH path", input)
+			return Remote{}, fmt.Errorf("remote: not a recognised Azure DevOps SSH path")
 		}
 		return Remote{Host: host, Owner: segments[0], Project: segments[1], Repo: segments[2]}, nil
 	}
@@ -219,7 +249,7 @@ func parseAzure(host string, segments []string, sshForm, shorthand bool, input s
 		return Remote{Host: host, Owner: segments[0], Project: segments[1], Repo: segments[2]}, nil
 	}
 	if len(segments) != 4 || segments[2] != "_git" {
-		return Remote{}, fmt.Errorf("remote: %q is not a recognised Azure DevOps HTTPS path", input)
+		return Remote{}, fmt.Errorf("remote: not a recognised Azure DevOps HTTPS path")
 	}
 	return Remote{Host: host, Owner: segments[0], Project: segments[1], Repo: segments[3]}, nil
 }

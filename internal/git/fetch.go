@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"strings"
 )
 
 // Fetch runs "git -C path fetch" against path's own default remote,
@@ -23,7 +22,16 @@ func Fetch(ctx context.Context, path string) error {
 	cmd.Stdout = &captured
 	cmd.Stderr = &captured
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git: fetch %s: %w: %s", path, err, strings.TrimSpace(captured.String()))
+		// Git picks the remote itself, so every configured URL of the
+		// repository counts, not only the one of "origin".
+		withhold := configuredURLsCarryCredential(gitIn(ctx, path))
+		return fetchError(path, err, captured.String(), withhold)
 	}
 	return nil
+}
+
+// fetchError folds git's output into the error for a failed fetch of path
+// through foldOutput.
+func fetchError(path string, err error, output string, withhold bool) error {
+	return fmt.Errorf("git: fetch %s: %w: %s", path, err, foldOutput(output, withhold))
 }

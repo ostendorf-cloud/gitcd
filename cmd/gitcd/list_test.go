@@ -34,6 +34,23 @@ func TestRunList_PrintsEveryRepositoryUnderRoot(t *testing.T) {
 	}
 }
 
+func TestRunList_JSONDoesNotCarryARemoteCredential(t *testing.T) {
+	home := setupEnv(t)
+	repo := filepath.Join(home, "Code", "github.com", "acme", "widget")
+	initRepository(t, repo)
+	addRemote(t, repo, "https://user:token123@github.com/acme/widget.git")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"list", "--json"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("list --json = %d, want 0, stderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "token123") {
+		t.Fatalf("list --json stdout carries the credential: %q", stdout.String())
+	}
+}
+
 func TestRunList_HidesALinkedWorktreeByDefault(t *testing.T) {
 	home := setupEnv(t)
 	root := filepath.Join(home, "Code")

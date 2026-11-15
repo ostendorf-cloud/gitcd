@@ -98,7 +98,7 @@ func runClone(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
-	logger.Debug("cloning", "url", cloneURL, "dest", dest)
+	logger.Debug("cloning", "url", remote.Redact(cloneURL), "dest", dest)
 
 	if err := git.CloneWithConfig(ctx, cloneURL, dest, pinned, stderr); err != nil {
 		fmt.Fprintf(stderr, "gitcd clone: %v\n", err)
@@ -159,7 +159,7 @@ func existingClone(
 	existing, err := remote.Parse(existingURL, cfg.AliasMap())
 	if err != nil {
 		fmt.Fprintf(
-			stderr, "gitcd clone: %s already exists with a remote gitcd cannot parse: %s\n", dest, existingURL,
+			stderr, "gitcd clone: %s already exists with a remote gitcd cannot parse\n", dest,
 		)
 		return 1
 	}
@@ -170,7 +170,7 @@ func existingClone(
 	}
 
 	fmt.Fprintf(
-		stderr, "gitcd clone: %s already exists with a different remote: have %s, want %s\n", dest, existingURL, input,
+		stderr, "gitcd clone: %s already exists with a different remote: have %s, want %s\n", dest, remote.Redact(existingURL), remote.Redact(input),
 	)
 	return 1
 }

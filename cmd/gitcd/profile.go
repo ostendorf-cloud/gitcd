@@ -16,6 +16,7 @@ import (
 	"github.com/ostendorf-cloud/gitcd/internal/git"
 	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
 	"github.com/ostendorf-cloud/gitcd/internal/profile"
+	"github.com/ostendorf-cloud/gitcd/internal/remote"
 )
 
 const profileUsage = `gitcd profile pins, removes or inspects a repository's identity profile.
@@ -238,7 +239,7 @@ func runProfileShow(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "remote: %s\n", repo.RemoteURL)
+	fmt.Fprintf(stdout, "remote: %s\n", remote.Redact(repo.RemoteURL))
 	fmt.Fprintf(stdout, "expected profile: %s\n", describeExpected(repo))
 	fmt.Fprintf(stdout, "user.email: %s\n", describeIdentity(repo.Email))
 	fmt.Fprintf(stdout, "user.signingkey: %s\n", describeIdentity(repo.SigningKey))

@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/ostendorf-cloud/gitcd/internal/remote"
 )
 
 // IdentityKeys are the git config keys a profile carries that gitcd's
@@ -58,7 +60,7 @@ func GlobalConfigPath() (string, error) {
 func ConfigAddGlobal(ctx context.Context, key, value string) error {
 	cmd := exec.CommandContext(ctx, "git", "config", "--global", "--add", key, value)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git: add global %s: %w: %s", key, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("git: add global %s: %w: %s", key, err, remote.Redact(strings.TrimSpace(string(out))))
 	}
 	return nil
 }
@@ -70,7 +72,7 @@ func ConfigAddGlobal(ctx context.Context, key, value string) error {
 func ConfigSetLocal(ctx context.Context, path, key, value string) error {
 	cmd := exec.CommandContext(ctx, "git", "-C", path, "config", "--local", key, value)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git: set local %s in %s: %w: %s", key, path, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("git: set local %s in %s: %w: %s", key, path, err, remote.Redact(strings.TrimSpace(string(out))))
 	}
 	return nil
 }
@@ -127,7 +129,7 @@ func ConfigUnsetLocal(ctx context.Context, path, key string) error {
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 5 {
 			return fmt.Errorf("git: unset local %s in %s: %w", key, path, ErrConfigKeyNotSet)
 		}
-		return fmt.Errorf("git: unset local %s in %s: %w: %s", key, path, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("git: unset local %s in %s: %w: %s", key, path, err, remote.Redact(strings.TrimSpace(string(out))))
 	}
 	return nil
 }
@@ -142,7 +144,7 @@ func ConfigUnsetGlobal(ctx context.Context, key string) error {
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 5 {
 			return fmt.Errorf("git: unset global %s: %w", key, ErrConfigKeyNotSet)
 		}
-		return fmt.Errorf("git: unset global %s: %w: %s", key, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("git: unset global %s: %w: %s", key, err, remote.Redact(strings.TrimSpace(string(out))))
 	}
 	return nil
 }
@@ -242,7 +244,7 @@ func revParsePath(ctx context.Context, path, arg string) (string, error) {
 func foldStderr(err error) error {
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
+		return fmt.Errorf("%w: %s", err, remote.Redact(strings.TrimSpace(string(exitErr.Stderr))))
 	}
 	return err
 }

@@ -94,6 +94,85 @@ func TestRunClone_ExistingTargetWithTheSameRemoteIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestRunClone_VerboseOutputDoesNotCarryARemoteCredential checks every place
+// a clone names its remote: the debug log, the failing clone's error and the
+// failing read of an existing clone's remote.
+func TestRunClone_VerboseOutputDoesNotCarryARemoteCredential(t *testing.T) {
+	const secret = "token123"
+
+	tests := []struct {
+		name  string
+		input string
+		setup func(t *testing.T, home, dest string)
+	}{
+		{
+			name:  "failing clone",
+			input: "https://user:" + secret + "@example.test/acme/widget.git",
+			setup: func(t *testing.T, home, _ string) {
+				// Rewrite the remote to a missing local path, so the clone
+				// fails without network access.
+				missing := filepath.Join(home, "missing")
+				runGit(t, home, "config", "--global",
+					"url.file://"+missing+"/.insteadOf", "https://user:"+secret+"@example.test/")
+			},
+		},
+		{
+			name:  "failing clone with the token as user name",
+			input: "https://" + secret + "@example.test/acme/widget.git",
+			setup: func(t *testing.T, home, _ string) {
+				missing := filepath.Join(home, "missing")
+				runGit(t, home, "config", "--global", "url.file://"+missing+"/.insteadOf", "https://"+secret+"@example.test/")
+			},
+		},
+		{
+			// A real git run that fails on the network: git's own output
+			// is folded into the error, so the credential must not
+			// appear in it.
+			name:  "failing clone from an unreachable host",
+			input: "https://user:" + secret + "@127.0.0.1:1/acme/widget.git",
+			setup: func(*testing.T, string, string) {},
+		},
+		{
+			name:  "failing clone with a slash in the token",
+			input: "https://user:" + secret + "/more@127.0.0.1:1/acme/widget.git",
+			setup: func(*testing.T, string, string) {},
+		},
+		{
+			name:  "existing clone with an unparsable remote",
+			input: "https://example.test/acme/widget.git",
+			setup: func(t *testing.T, _, dest string) {
+				initRepository(t, dest)
+				runGit(t, dest, "remote", "add", "origin", "https://user:"+secret+"@example.test/widget")
+			},
+		},
+		{
+			name:  "existing clone with a different remote",
+			input: "https://user:" + secret + "@example.test/acme/widget.git",
+			setup: func(t *testing.T, _, dest string) {
+				initRepository(t, dest)
+				runGit(t, dest, "remote", "add", "origin", "https://user:"+secret+"@example.test/acme/other.git")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := setupEnv(t)
+			dest := filepath.Join(home, "Code", "example.test", "acme", "widget")
+			tt.setup(t, home, dest)
+
+			var stdout, stderr bytes.Buffer
+			code := run([]string{"clone", "--verbose", tt.input}, &stdout, &stderr)
+
+			if code == 0 {
+				t.Fatalf("clone %q = 0, want a failure", tt.input)
+			}
+			if strings.Contains(stderr.String(), secret) || strings.Contains(stdout.String(), secret) {
+				t.Fatalf("clone output carries the credential, stdout: %q, stderr: %q", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
 func TestRunClone_ExistingTargetWithADifferentRemoteFailsNamingBoth(t *testing.T) {
 	home := setupEnv(t)
 	root := filepath.Join(home, "Code")

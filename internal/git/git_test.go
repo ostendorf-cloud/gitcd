@@ -6,6 +6,7 @@ package git_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -140,6 +141,197 @@ func TestCloneWithConfig(t *testing.T) {
 	}
 	if value.Value != "[email protected]" {
 		t.Fatalf("ShowOrigin() value = %q, want %q, the value CloneWithConfig pinned", value.Value, "[email protected]")
+	}
+}
+
+func TestClone_FailureDoesNotCarryTheRemoteCredential(t *testing.T) {
+	setupGitEnv(t)
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "user and password", url: "https://user:token123@example.test/acme/widget.git"},
+		{name: "token as user name", url: "https://token123@example.test/acme/widget.git"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Rewrite the URL to a missing local path, so the clone fails
+			// without any network access.
+			prefix := tt.url[:strings.LastIndex(tt.url, "/acme")+1]
+			config := map[string]string{"url.file://" + missing + "/.insteadOf": prefix}
+			var progress bytes.Buffer
+			err := git.CloneWithConfig(context.Background(), tt.url, filepath.Join(t.TempDir(), "dest"), config, &progress)
+			if err == nil {
+				t.Fatal("CloneWithConfig() succeeded, want a failure")
+			}
+			if strings.Contains(err.Error(), "token123") {
+				t.Fatalf("CloneWithConfig() error carries the credential: %v", err)
+			}
+		})
+	}
+}
+
+func TestFetchError_DoesNotCarryTheRemoteCredential(t *testing.T) {
+	t.Parallel()
+
+	// The output is what git prints on a Linux runner, where it repeats a
+	// part of the credential as plain text after the URL.
+	const couldNotResolve = "fatal: unable to access 'https://h.invalid/x/': Could not resolve host: FAKE"
+	// Each entry is what "git config -z --get-regexp" returns for the
+	// repository: the key, a newline, the value, a NUL.
+	tests := []struct {
+		name   string
+		config string
+		output string
+	}{
+		{
+			name:   "origin with a credential",
+			config: "remote.origin.url\nhttps://user:FAKE/SEC?RET@h.invalid/acme/widget.git\x00",
+			output: "fatal: unable to access 'https://user:FAKE/SEC?RET@h.invalid/acme/widget.git/': Could not resolve host: FAKE",
+		},
+		{
+			name:   "token with a slash as the user name",
+			config: "remote.origin.url\nhttps://FAKE/SEC#RET@h.invalid/acme/widget.git\x00",
+			output: "fatal: unable to access 'https://FAKE/SEC#RET@h.invalid/acme/widget.git/': Could not resolve host: FAKE",
+		},
+		{
+			name:   "could not read a user name",
+			config: "remote.origin.url\nhttps://user:FAKESECRET@h.invalid/acme/widget.git\x00",
+			output: "fatal: could not read Username for 'https://h.invalid': terminal prompts disabled\nSEC RET",
+		},
+		{
+			name:   "url that does not parse",
+			config: "remote.origin.url\nhttps://user:FAKE SEC?RET@h.invalid/x\x00",
+			output: "fatal: unable to access: bad URL FAKE SEC RET",
+		},
+		{
+			name:   "only upstream carries a credential",
+			config: "remote.upstream.url\nhttps://user:FAKESECRET@h.invalid/acme/widget.git\x00",
+			output: couldNotResolve,
+		},
+		{
+			name: "a tracked fork carries a credential and origin is clean",
+			config: "remote.origin.url\nhttps://h.test/acme/widget.git\x00" +
+				"remote.fork.url\nhttps://user:FAKESECRET@h.invalid/me/widget.git\x00",
+			output: couldNotResolve,
+		},
+		{
+			name: "a push url carries a credential",
+			config: "remote.origin.url\nhttps://h.test/acme/widget.git\x00" +
+				"remote.origin.pushurl\nhttps://user:FAKESECRET@h.invalid/acme/widget.git\x00",
+			output: couldNotResolve,
+		},
+		{
+			name: "a rewrite rule base carries a credential",
+			config: "remote.origin.url\nhttps://h.test/acme/widget.git\x00" +
+				"url.https://user:FAKESECRET@h.invalid/.insteadof\nhttps://h.test/\x00",
+			output: couldNotResolve,
+		},
+		{
+			name: "a rewrite rule prefix carries a credential",
+			config: "remote.origin.url\nhttps://h.test/acme/widget.git\x00" +
+				"url.https://h.test/.pushinsteadof\nhttps://user:FAKESECRET@h.invalid/\x00",
+			output: couldNotResolve,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			run := func(...string) ([]byte, error) { return []byte(tt.config), nil }
+			withhold := git.ConfiguredURLsCarryCredential(run)
+			if !withhold {
+				t.Fatalf("ConfiguredURLsCarryCredential() = false, want true")
+			}
+			err := git.FetchError("/repo", errors.New("exit status 128"), tt.output, withhold)
+			for _, part := range []string{"FAKE", "SEC", "RET"} {
+				if strings.Contains(err.Error(), part) {
+					t.Fatalf("FetchError() carries %q: %v", part, err)
+				}
+			}
+			if !strings.Contains(err.Error(), "exit status 128") {
+				t.Fatalf("FetchError() = %v, want the exit status kept", err)
+			}
+		})
+	}
+}
+
+func TestConfiguredURLsCarryCredential(t *testing.T) {
+	setupGitEnv(t)
+
+	noMatch := exec.CommandContext(context.Background(), "git", "config", "--get", "no.such.key").Run()
+	var exitErr *exec.ExitError
+	if !errors.As(noMatch, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("git config --get of a missing key = %v, want exit status 1", noMatch)
+	}
+
+	tests := []struct {
+		name string
+		out  string
+		err  error
+		want bool
+	}{
+		{name: "clean repository", out: "remote.origin.url\nhttps://h.test/acme/widget.git\x00remote.origin.fetch\n+refs/heads/*\x00", want: false},
+		{name: "ssh user only", out: "remote.origin.url\nssh://git@h.test/acme/widget.git\x00", want: false},
+		{name: "scp style", out: "remote.origin.url\ngit@h.test:acme/widget.git\x00", want: false},
+		{name: "rewrite rule without a credential", out: "url.git@h.test:.insteadof\nhttps://h.test/\x00", want: false},
+		{name: "no configured url at all", err: noMatch, want: false},
+		{name: "configuration cannot be read", err: errors.New("boom"), want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			run := func(...string) ([]byte, error) { return []byte(tt.out), tt.err }
+			if got := git.ConfiguredURLsCarryCredential(run); got != tt.want {
+				t.Fatalf("ConfiguredURLsCarryCredential() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFetch_WithholdsOutputWhenOnlyAnotherRemoteCarriesACredential(t *testing.T) {
+	setupGitEnv(t)
+
+	repo := t.TempDir()
+	initRepository(t, repo)
+	run(t, repo, "remote", "add", "upstream", "https://user:FAKESECRET@127.0.0.1:1/acme/widget.git")
+
+	err := git.Fetch(context.Background(), repo)
+	if err == nil {
+		t.Fatal("Fetch() succeeded, want a failure for an unreachable remote")
+	}
+	if strings.Contains(err.Error(), "FAKE") || !strings.Contains(err.Error(), "withheld") {
+		t.Fatalf("Fetch() error = %v, want git's output withheld", err)
+	}
+}
+
+func TestFetchError_KeepsTheOutputForACleanRepository(t *testing.T) {
+	t.Parallel()
+
+	err := git.FetchError("/repo", errors.New("exit status 128"), "fatal: no route to host", false)
+	if !strings.Contains(err.Error(), "no route to host") {
+		t.Fatalf("FetchError() = %v, want git's output kept", err)
+	}
+}
+
+func TestClone_WithACredentialStreamsNothingFromGit(t *testing.T) {
+	setupGitEnv(t)
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	remoteURL := "https://user:FAKE/SEC?RET@h.invalid/acme/widget.git"
+	config := map[string]string{"url.file://" + missing + "/.insteadOf": "https://user:FAKE/SEC?RET@h.invalid/"}
+	var progress bytes.Buffer
+	err := git.CloneWithConfig(context.Background(), remoteURL, filepath.Join(t.TempDir(), "dest"), config, &progress)
+	if err == nil {
+		t.Fatal("CloneWithConfig() succeeded, want a failure")
+	}
+	if progress.Len() != 0 {
+		t.Fatalf("progress = %q, want git's output withheld", progress.String())
+	}
+	for _, part := range []string{"FAKE", "SEC", "RET"} {
+		if strings.Contains(err.Error(), part) {
+			t.Fatalf("CloneWithConfig() error carries %q: %v", part, err)
+		}
 	}
 }
 
