@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -156,6 +157,20 @@ type ConfigValue struct {
 	Origin string
 }
 
+// unquoteOrigin undoes the C style quoting git applies to a file name it
+// prints when the name holds a character such as a backslash, which every
+// Windows path written with its native separators does: the origin then
+// reads "C:\\Users\\x" inside double quotes. A name without quotes is
+// returned unchanged.
+func unquoteOrigin(origin string) string {
+	if len(origin) >= 2 && origin[0] == '"' && origin[len(origin)-1] == '"' {
+		if unquoted, err := strconv.Unquote(origin); err == nil {
+			return unquoted
+		}
+	}
+	return origin
+}
+
 // ShowOrigin runs "git -C path config --show-origin --get key" and reports
 // the effective value together with its origin file. ok is false when key
 // carries no value at all, which is not an error: a profile's signing key
@@ -177,7 +192,7 @@ func ShowOrigin(ctx context.Context, path, key string) (value ConfigValue, ok bo
 		return ConfigValue{Value: line}, true, nil
 	}
 	origin, val := line[:idx], line[idx+1:]
-	origin = strings.TrimPrefix(origin, "file:")
+	origin = unquoteOrigin(strings.TrimPrefix(origin, "file:"))
 	if origin != "" && !filepath.IsAbs(origin) {
 		// git reports a local scope file's origin relative to the
 		// directory it ran in, "-C path" in this case, not relative to
