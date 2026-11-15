@@ -449,7 +449,7 @@ func CheckOptedInKeys(cfg config.Config) []Finding {
 	var findings []Finding
 	for _, name := range names {
 		for _, key := range cfg.Profiles[name].Keys() {
-			why, optedIn := config.UnsafeKeyReason(key)
+			why, optedIn := config.UnsafeKeyReason(key, cfg.Profiles[name][key])
 			if !optedIn {
 				continue
 			}

@@ -5,9 +5,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -106,6 +109,106 @@ func TestRunApply_GivesEveryProfileItsOwnFile(t *testing.T) {
 			t.Errorf("%s holds %q, want the profile %q own address %q", path, content, name, email)
 		}
 	}
+}
+
+// TestRunApply_AppliesARepresentativeProfile runs a profile covering
+// every kind of setting a person legitimately puts in one, and asserts
+// that git reads each value back out of the file "apply" wrote.
+//
+// It exists to stop a later tightening of the restricted key gate from
+// quietly refusing ordinary settings. A gate is only useful if what it
+// lets through still works, and a refusal that has to be opted back in
+// to set a boolean is as much a defect as an acceptance, so this is the
+// half of the gate's behaviour that needs pinning down end to end.
+func TestRunApply_AppliesARepresentativeProfile(t *testing.T) {
+	keys := map[string]string{
+		"user.name":                  "Simon Ostendorf",
+		"user.email":                 "simon@example.test",
+		"user.signingKey":            "ssh-ed25519 AAAAEXAMPLE",
+		"gpg.format":                 "ssh",
+		"gpg.ssh.allowedSignersFile": "/home/simon/.signers",
+		"commit.gpgsign":             "true",
+		"tag.gpgsign":                "true",
+		"core.autocrlf":              "input",
+		"core.attributesFile":        "/home/simon/.gitattributes",
+		"core.excludesFile":          "/home/simon/.gitignore",
+		"core.commentString":         "//",
+		"core.sparseCheckout":        "true",
+		"core.sparseCheckoutCone":    "true",
+		"core.longPaths":             "true",
+		"core.fsync":                 "committed",
+		"core.fsyncMethod":           "fsync",
+		"core.preloadIndex":          "true",
+		"core.splitIndex":            "false",
+		"core.commitGraph":           "true",
+		"core.multiPackIndex":        "true",
+		"core.ignoreStat":            "false",
+		"core.checkStat":             "default",
+		"core.notesRef":              "refs/notes/commits",
+		"core.deltaBaseCacheLimit":   "96m",
+		"core.warnAmbiguousRefs":     "true",
+		"core.maxTreeDepth":          "4096",
+		"advice.ignoredHook":         "false",
+		"advice.waitingForEditor":    "false",
+		"column.clean":               "never",
+		"color.pager":                "true",
+		"difftool.prompt":            "false",
+		"mergetool.prompt":           "false",
+		"mergetool.keepBackup":       "false",
+		"protocol.version":           "2",
+		"credential.useHttpPath":     "true",
+		"init.defaultBranch":         "main",
+		"pull.rebase":                "true",
+		"diff.algorithm":             "histogram",
+		"merge.conflictStyle":        "zdiff3",
+	}
+
+	home := setupEnv(t)
+	var b strings.Builder
+	b.WriteString("profiles:\n  private:\n")
+	for _, key := range sortedKeys(keys) {
+		b.WriteString("    " + quoteYAML(key) + ": " + quoteYAML(keys[key]) + "\n")
+	}
+	b.WriteString("\nrules:\n  - host: github.com\n    owner: acme\n    profile: private\n")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), b.String())
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"apply"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("apply = %d, want 0, stderr: %s", code, stderr.String())
+	}
+
+	path := filepath.Join(home, ".config", "gitcd", "profiles", "private.gitconfig")
+	for _, key := range sortedKeys(keys) {
+		got := gitConfigValue(t, path, key)
+		if got != keys[key] {
+			t.Errorf("git read %s = %q out of %s, want %q", key, got, path, keys[key])
+		}
+	}
+}
+
+// gitConfigValue returns what git itself reads back for key out of the
+// config file at path.
+func gitConfigValue(t *testing.T, path, key string) string {
+	t.Helper()
+
+	cmd := exec.CommandContext(context.Background(), "git", "config", "--file", path, "--get", key)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Errorf("git config --file %s --get %s: %v: %s", path, key, err, out)
+		return ""
+	}
+	return strings.TrimRight(string(out), "\n")
+}
+
+// sortedKeys returns the keys of m, sorted, so a table driven over it
+// reads and fails in a stable order.
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for key := range m {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // profileAndRule renders a configuration whose single profile, and the

@@ -123,32 +123,52 @@ reads the remote URL, so a profile setting one would decide its own condition.
 
 Some git config keys hand git a command to run, take over a credential prompt, change which URL
 git contacts, or decide what git trusts. A profile is picked automatically per remote, so these
-are rejected unless `allowUnsafeKeys` names the key. They are described as families, not as a
-list, and the subsection never decides a match, so `diff.command` and `diff.<driver>.command`
-are the same setting to the gate:
+are rejected unless `allowUnsafeKeys` names the key. A key is restricted for either of two
+reasons.
 
-- a key name ending in `askPass`, `clean`, `cmd`, `command`, `driver`, `editor`, `external`,
-  `hook`, `hooksPath`, `pager`, `process`, `program`, `proxy`, `smudge`, `templateDir`,
-  `textconv` or `variant`, under any section
-- the key names `allow`, `destination`, `directory`, `fsmonitor`, `insteadOf` and
-  `pushInsteadOf`, under any section
-- every key under `alias`, `credential`, `difftool`, `mergetool`, `pager`, `protocol`, `safe`,
-  `trace2` and `url`
-- every key under `core` except the working tree settings: `abbrev`, `autocrlf`, `bare`,
-  `bigFileThreshold`, `commentChar`, `compression`, `eol`, `excludesFile`, `fileMode`,
-  `ignoreCase`, `logAllRefUpdates`, `looseCompression`, `precomposeUnicode`, `quotePath`,
-  `safeCRLF`, `sharedRepository`, `symlinks`, `trustCtime`, `untrackedCache` and `whitespace`
+The first is what the key does. These are families, not a list, and the subsection never
+decides a match, so `diff.command` and `diff.<driver>.command` are the same setting to the gate:
 
-`core` is listed the other way round on purpose. Its keys run from `core.autocrlf`, which any
-profile may set, to `core.sshCommand` and `core.hooksPath`, which none may set unannounced, and
-nothing in the spelling tells the two apart. Naming what a profile legitimately sets puts a key
-git adds later on the restricted side by default.
+- a key name ending in `askPass`, `cmd`, `command`, `driver`, `editor`, `external`, `hook`,
+  `hooksPath`, `httpd`, `pager`, `process`, `program`, `proxy`, `smtpServer`, `target`,
+  `templateDir`, `textconv`, `tunnel` or `variant`, under any section
+- the key names `allow`, `bareRepository`, `directory`, `fsmonitor`, `helper`, `insteadOf`,
+  `protectHFS`, `protectNTFS`, `pushInsteadOf`, `sharedRepository` and `symlinks`, under any
+  section
+- `clean`, `smudge` and `process` under `filter`, and `path` under `difftool` and `mergetool`
+- every key under `alias`, `pager` and `url`
 
-The signing keys a profile exists to carry are not restricted: `user.name`, `user.email`,
-`user.signingKey`, `gpg.format`, `gpg.ssh.allowedSignersFile`, `commit.gpgsign` and
-`tag.gpgsign`. `gpg.format` selects a format and names no command; the program for each format
-is `gpg.<format>.program`, which is restricted. `gpg.ssh.allowedSignersFile` is a file git reads
-to verify a signature, and decides no identity.
+A match is set aside only in `advice`, `color` and `column`, the sections where git resolves no
+key's value to a program or a path, so a match there is a collision of spelling:
+`advice.ignoredHook` and `color.pager` read like commands and are plain switches.
+
+The value is never what sets a match aside. `true`, `false` and `yes` are programs on `PATH`,
+so `core.sshCommand = false` runs `/usr/bin/false` and `core.sshCommand = yes` never returns; a
+key whose value git resolves to a program is restricted whatever it carries, an empty value
+included.
+
+The four protection names are a scope decision, not a command: a profile may not weaken
+`core.protectNTFS`, `core.protectHFS`, `core.sharedRepository` or `core.symlinks`. A profile is
+applied automatically, per remote, to a repository whose contents came from that remote, and
+what git will write to the filesystem should not be decided by the same mechanism that decides
+who the commit is from. Naming one in `allowUnsafeKeys` still sets it.
+
+The second is that the key is not one the git this gitcd was built against documents at all.
+`internal/config/gitkeys.go` holds that list, generated from `git help -c` by
+`task generate:gitkeys`. This is what keeps the families from having to be exhaustive: a
+setting git adds later is restricted whatever it is called, so the families can describe what
+they really cover instead of being widened until they catch everything. The cost is that a key
+from a newer git, and a key in a section whose names git does not enumerate such as
+`filter.<driver>.required` or `pager.<command>`, is refused until the list is regenerated or the
+key is named in `allowUnsafeKeys`. A short addendum in `internal/config/validate.go` carries the
+keys git documents in `git-config(1)` but does not print, `core.longPaths` today; each entry
+names where git documents it, and a test fails if the generated list starts carrying it.
+
+The identity and signing keys a profile exists to carry are not restricted: `user.name`,
+`user.email`, `user.signingKey`, `gpg.format`, `gpg.ssh.allowedSignersFile`, `commit.gpgsign`
+and `tag.gpgsign`. `gpg.format` is read against a fixed set of formats and names no command; the
+program for each format is `gpg.<format>.program`, which is restricted.
+`gpg.ssh.allowedSignersFile` is a file git reads to verify a signature, and decides no identity.
 
 ```yaml
 allowUnsafeKeys:
@@ -165,11 +185,18 @@ case-insensitively, the subsection exactly. A wildcard is not accepted, and an e
 key that needs no opt in is rejected rather than ignored. `doctor` reports every key applied
 this way, so the choice stays visible.
 
-### What a host alias and a layout may be
+### What a root, a host alias and a layout may be
+
+`root` is rendered into the generated directory conditions, so it has to name a directory and
+nothing more: an absolute path, holding no glob metacharacter, no quote, no control character
+and no `.` or `..` segment. A space and a non-ASCII name are fine, because a home directory may
+hold either. A glob here would match repositories outside the root, and a quote would make git
+refuse the file your global configuration includes.
 
 A host's `aliases` are written into the generated conditions in the same position the rule's own
-host occupies, so each is held to the same terms as a rule host: no glob, no quote, no path
-separator. An alias of `*` would otherwise apply an owner scoped rule on every host.
+host occupies, so each is held to much the same terms as a rule host: no glob, no quote, no path
+separator. An alias of `*` would otherwise apply an owner scoped rule on every host. An
+underscore is accepted, since an alias is an `ssh_config` `Host` name rather than a DNS name.
 
 A layout template is a path, so unlike a rule field it carries `/` between its segments and
 `{host}` style placeholders inside them. Each segment may hold placeholders from the set

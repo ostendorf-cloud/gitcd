@@ -173,14 +173,19 @@ func RenderProfile(p config.Profile, useConfigOnly bool) (string, error) {
 // successfully under a guessed identity despite every profile file
 // itself setting "useConfigOnly = true".
 //
-// Every input that reaches a condition here is validated by
-// config.Config.Validate, which Render calls before this runs: a rule's
-// host, owner and repo, the profile name each path is built from, the
-// host aliases hasconfigGlobs interpolates, and the layout template
-// renderGitdirGlob interpolates. None of the four is written as a value,
-// so neither quoting nor escaping applies to any of them: one holding a
-// quote would close the condition, and one holding a glob metacharacter
-// would match repositories the rule does not name.
+// Nothing here is validated, and nothing here may be. Every field this
+// function interpolates into a condition is checked by
+// config.Config.Validate, which Render calls before this runs, and
+// which validates the whole Config rather than a list of fields: an
+// enumeration kept here would be a second place to remember to extend,
+// and the field that reaches a condition without being on it is exactly
+// the defect that keeps recurring.
+//
+// What the conditions need is why that matters. A condition is not a
+// value, so neither quoting nor escaping applies to anything
+// interpolated into one: a field holding a quote closes the condition
+// and makes git refuse the whole file, and a field holding a glob
+// metacharacter silently widens the condition past what the rule names.
 func renderIncludes(cfg config.Config, home string) string {
 	var b strings.Builder
 	b.WriteString(generatedHeader)
