@@ -25,6 +25,11 @@ tasks:
     cmds:
       - go run ./cmd/gitcd {{.CLI_ARGS}}
 
+  generate:gitkeys:
+    desc: Regenerate the git config key list from the installed git
+    cmds:
+      - ./scripts/generate-git-config-keys.sh
+
   lint:fmt:
     desc: Go format check through golangci-lint
     cmds:
