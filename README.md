@@ -265,6 +265,15 @@ task check
 
 One target per check, one CI job per target. `check` only calls the small targets.
 
+Every commit needs a DCO sign-off. See `CONTRIBUTING.md`.
+
+Supported systems: Linux, macOS and Windows. CI runs the Go tests on all three. Lint, vet and
+the shell script checks run on Linux only.
+
+## Security
+
+To report a vulnerability, see `SECURITY.md`.
+
 ## License
 
 Apache-2.0. See `LICENSE`.
