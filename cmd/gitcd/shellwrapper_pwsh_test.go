@@ -101,7 +101,7 @@ func TestShellWrapper_ExecutesInPowerShell(t *testing.T) {
 		{"FAIL_OUT_EMPTY", "True"},
 		{"FAIL_CHANGED", "False"},
 		{"FAIL_EXTRA_ERRORS", "0"},
-		{"PASS_OUT", "dev"},
+		{"PASS_OUT", "gitcd dev (commit none, built unknown)"},
 		{"CD_COMPLETIONS", "widget"},
 		{"STATUS_COMPLETION_COUNT", "0"},
 	} {

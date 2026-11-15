@@ -2,5 +2,5 @@
   "$schema": "https://raw.githubusercontent.com/ostendorf-cloud/skills/main/agent-skills.schema.json",
   "verify": "task check",
   "pr": { "base": "main", "draft": true, "merge": "merge" },
-  "release": false
+  "release": { "tool": "release-me" }
 }

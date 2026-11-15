@@ -18,8 +18,11 @@ func TestRun_Version(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run([version]) = %d, want 0", code)
 	}
-	if got := strings.TrimSpace(stdout.String()); got != Version {
-		t.Fatalf("run([version]) wrote %q on stdout, want %q", got, Version)
+	got := strings.TrimSpace(stdout.String())
+	for _, want := range []string{Version, Commit, Date} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("run([version]) wrote %q on stdout, want it to contain %q", got, want)
+		}
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("run([version]) wrote to stderr: %q", stderr.String())

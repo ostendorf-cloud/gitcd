@@ -13,8 +13,13 @@ import (
 	"os"
 )
 
-// Version is set at build time from the release tag.
-var Version = "dev"
+// Version, Commit and Date are set at build time from the release tag, the
+// commit it was built from and the build timestamp.
+var (
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+)
 
 const usage = `gitcd clones repositories into a predictable path layout and lets the shell jump to any of them.
 
