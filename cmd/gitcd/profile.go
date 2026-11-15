@@ -239,7 +239,7 @@ func runProfileShow(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "remote: %s\n", remote.Redact(repo.RemoteURL))
+	fmt.Fprintf(stdout, "remote: %s\n", remote.RedactRemote(repo.RemoteURL))
 	fmt.Fprintf(stdout, "expected profile: %s\n", describeExpected(repo))
 	fmt.Fprintf(stdout, "user.email: %s\n", describeIdentity(repo.Email))
 	fmt.Fprintf(stdout, "user.signingkey: %s\n", describeIdentity(repo.SigningKey))

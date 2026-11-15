@@ -28,6 +28,18 @@ may repeat part of the credential outside any URL, such as in `Could not resolve
 exit status is kept. Output git writes on its own, outside what gitcd captures, is not
 something gitcd can change, and `--verbose` does not change any of this.
 
+The query and the fragment of a URL are masked the same way: gitcd replaces everything from the
+first `?` or `#` up to the end of the URL with `***` and keeps the marker, as in
+`https://host/acme/widget.git?***`. It applies to every host and has no list of parameter
+names. A URL with a query or a fragment is treated like one with a credential, in every place
+it can appear: a remote, a push URL and both sides of a rewrite rule. The cost is that git's own
+messages for such a remote are not shown. A remote given as a whole value, such as the scp
+style `git@host:path`, the bare shorthand or a configured URL, is masked from its first `?` or
+`#` to the end of the value, and its query or fragment is not part of the repository path. In
+git's own output, a URL's query ends at white space or a quote. Git's output is withheld based
+on the configuration visible before the clone, so a rewrite that only applies inside the new
+repository is not considered.
+
 Two user names are not a credential and are shown as they are, with git's output kept:
 
 - A plain user name on an `ssh://` URL, as in `ssh://git@host/acme/widget.git`, and the scp
@@ -38,10 +50,8 @@ Two user names are not a credential and are shown as they are, with git's output
   first path segment, ignoring case and after percent decoding. A user that differs, a
   password, an empty user, another host or an alias such as `ssh.dev.azure.com`, a port or
   plain `http` all keep the `***` and the withheld output. So does any URL with a `?` query or
-  a `#` fragment, where a secret may sit. gitcd masks only the user part of a URL, so a query
-  secret stays visible in a URL it prints; keep it out of the remote. The check applies to
-  every URL git may use: one remote, a push URL and a rewrite rule that carries a token still
-  withhold the output of a fetch.
+  a `#` fragment. The check applies to every URL git may use: one remote, a push URL and a
+  rewrite rule that carries a token still withhold the output of a fetch.
 
 A token put into an Azure DevOps URL, as in `https://TOKEN@dev.azure.com/...`,
 `https://USER:TOKEN@dev.azure.com/...` or `https://:TOKEN@dev.azure.com/...`, parses to the same

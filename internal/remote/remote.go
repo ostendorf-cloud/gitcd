@@ -59,6 +59,12 @@ var (
 // disables alias resolution and every host is used as written, lowercased.
 func Parse(input string, aliases map[string]string) (Remote, error) {
 	trimmed := strings.TrimSpace(input)
+	// A URL's query and fragment are split off by url.Parse. The scp style
+	// and the shorthand have no such split, so it is made here: whatever
+	// follows the first "?" or "#" is not part of the remote.
+	if i := strings.IndexAny(trimmed, "?#"); i >= 0 && !strings.Contains(trimmed[:i], "://") {
+		trimmed = strings.TrimSpace(trimmed[:i])
+	}
 	if trimmed == "" {
 		return Remote{}, fmt.Errorf("remote: input is empty")
 	}

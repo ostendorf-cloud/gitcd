@@ -97,7 +97,7 @@ func listEntries(ctx context.Context, cfg config.Config, managedDir string, with
 	for _, res := range results {
 		entries = append(entries, listEntry{
 			Path:     res.Repo.Path,
-			Remote:   remote.Redact(res.Repo.RemoteURL),
+			Remote:   remote.RedactRemote(res.Repo.RemoteURL),
 			Worktree: res.Repo.IsWorktree,
 		})
 	}
