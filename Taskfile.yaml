@@ -45,6 +45,19 @@ tasks:
     cmds:
       - golangci-lint run
 
+  lint:license:
+    desc: License header check for every Go and shell source file
+    cmds:
+      - |
+        addlicense -check -c "Simon Ostendorf" -y 2026 -l apache -s=only \
+          $(find . \( -name "*.go" -o -name "*.sh" \) \
+            -not -path "./.git/*" -not -path "./.claude/*" -not -path "./bin/*" -not -path "./dist/*")
+
+  lint:license-spdx:
+    desc: Every covered source file names the license of LICENSE
+    cmds:
+      - scripts/check-license-spdx.sh
+
   lint:markdown:
     desc: Markdown lint
     cmds:
@@ -96,6 +109,8 @@ tasks:
       - task: lint:fmt
       - task: lint:vet
       - task: lint:golangci
+      - task: lint:license
+      - task: lint:license-spdx
       - task: lint:markdown
       - task: lint:yaml
       - task: lint:actions

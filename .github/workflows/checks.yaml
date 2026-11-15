@@ -124,6 +124,39 @@ jobs:
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
       - run: task lint:shell
 
+  # The one header check CI does not run through its Task target: the shared
+  # workflow pins addlicense itself, so the check runs on a known version
+  # even in a checkout whose mise.toml has drifted. "task lint:license"
+  # stays for local use and runs the same tool, flags and files.
+  #
+  # Covered: every .go and .sh file, the generated internal/config/gitkeys.go
+  # included, since its generator writes the header. Not covered: .claude/
+  # (agent worktrees), .git/, bin/ and dist/ (build output). Keep this find
+  # in step with the one in Taskfile.yaml.
+  license:
+    uses: ostendorf-cloud/workflows/.github/workflows/reusable-license.yaml@a798b963d20b239bec48c101af965e08fac36146  # v0.3.0
+    with:
+      copyright-holder: Simon Ostendorf
+      year: "2026"
+      license-type: apache
+      find-commands: |
+        find . \( -name "*.go" -o -name "*.sh" \) -not -path "./.git/*" -not -path "./.claude/*" -not -path "./bin/*" -not -path "./dist/*"
+
+  # addlicense only proves a header exists. This compares the SPDX identifier
+  # of every covered file against the license of LICENSE.
+  license-spdx:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+      - run: task lint:license-spdx
+
+  # Validates renovate.json through the shared reusable workflow, which pins
+  # Renovate itself. There is no local Task target, see AGENTS.md.
+  renovate-config:
+    uses: ostendorf-cloud/workflows/.github/workflows/reusable-renovate-config.yaml@a798b963d20b239bec48c101af965e08fac36146  # v0.3.0
+
   gitleaks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -134,24 +167,43 @@ jobs:
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
       - run: task lint:secrets
 
+  # The Go tests run on every system the README names as supported. The
+  # job name carries the system, so a failure names it. fail-fast is off so
+  # one failing system does not hide the result of the others.
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+      # The cache directories differ per system: ~/.cache/go-build on Linux,
+      # ~/Library/Caches/go-build on macOS, %LocalAppData%\go-build on
+      # Windows. Go itself knows them, so ask it instead of hardcoding.
+      - name: Find the Go cache directories
+        id: go-cache
+        shell: bash
+        run: |
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
       - name: Cache Go modules and build output
         # Module cache avoids re-downloading dependencies, build cache keeps
         # a recompile fast instead of starting cold.
         #
-        # Own key, since vet, pwsh and build each cache a different module
-        # set. A miss falls back to this job's own cache first, then to the
-        # others, which still covers most packages.
+        # Own key per system, since runner.os leads the key and each system
+        # caches different build output. One architecture per system, so the
+        # OS alone keeps the keys apart. A miss falls back to this job's own
+        # cache on the same system first, then to the other jobs' caches,
+        # which exist on Linux only.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
+            ${{ steps.go-cache.outputs.mod }}
+            ${{ steps.go-cache.outputs.build }}
           key: ${{ runner.os }}-test-${{ hashFiles('go.sum', 'mise.toml') }}
           restore-keys: |
             ${{ runner.os }}-test-
