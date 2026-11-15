@@ -66,8 +66,8 @@
 - `internal/scan` walks the configured root into repository values for `list`, `doctor` and
   `status` to consume, treating a `.git` file, not only a `.git` directory, as a repository
   boundary, so a linked worktree is never descended into by mistake.
-- `internal/shell` renders the per shell snippet that wraps the binary, so `clone` and `path`
-  change the shell's directory instead of only printing it.
+- `internal/shell` renders the per shell snippet that wraps the binary, so `clone`, `path` and
+  `cd` change the shell's directory instead of only printing it.
 - Every command runs locally, reads its configuration once, and performs its own writes; the
   core packages themselves never write anything, only render what the command layer writes.
 
@@ -85,16 +85,16 @@
 ## Open questions
 
 - Repositories outside `root` are reachable through `hasconfig` regardless of being managed.
-  Should `list` and `status` find them too, and from what index. Next step: revisit once `list`
-  ships in M2.
+  Should `list` and `status` find them too, and from what index. `list` (issue #3) shipped
+  without answering it, listing indexing outside `root` as out of scope, and `status` (issue #5)
+  shipped without raising the question at all.
 - Should `cd` prefer an installed `fzf` over the built in picker. Next step: deferred until the
   built in picker has seen real use.
-- Is a `migrate` command for a changed layout template worth it, or is running `adopt` in a
-  loop enough. Next step: decide while building M3's `adopt`.
 - Does a profile need a per host `core.sshCommand` to pin an identity file, or do SSH host
-  aliases already cover it. Next step: settle while building M1b's profile resolver.
-- Should gitcd manage an allowed signers file for SSH signature verification. Next step: open
-  during M1b if a user asks for verification, not before.
+  aliases already cover it. Open since the profile resolver shipped in issue #2; nothing has
+  revisited it.
+- Should gitcd manage an allowed signers file for SSH signature verification. Next step: open an
+  issue if a user asks for verification, not before.
 - Azure DevOps URL forms, SSH host `ssh.dev.azure.com` with path `v3/{org}/{project}/{repo}`,
   and HTTPS `dev.azure.com/{org}/{project}/_git/{repo}`, are implemented but unverified against
   a real remote. Next step: confirm against an actual Azure DevOps repository.
