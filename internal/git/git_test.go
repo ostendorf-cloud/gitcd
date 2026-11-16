@@ -278,12 +278,54 @@ func TestConfiguredURLsCarryCredential(t *testing.T) {
 		{name: "rewrite rule without a credential", out: "url.git@h.test:.insteadof\nhttps://h.test/\x00", want: false},
 		{name: "no configured url at all", err: noMatch, want: false},
 		{name: "configuration cannot be read", err: errors.New("boom"), want: true},
+		{name: "query in the url", out: "remote.origin.url\nhttps://h.test/acme/widget.git?a=b\x00", want: true},
+		{name: "fragment in the url", out: "remote.origin.url\nhttps://h.test/acme/widget.git#a\x00", want: true},
+		{name: "query in a push url", out: "remote.origin.url\nhttps://h.test/a/w.git\x00remote.origin.pushurl\nhttps://h.test/a/w.git?a=b\x00", want: true},
+		{name: "query in another remote", out: "remote.origin.url\nhttps://h.test/a/w.git\x00remote.other.url\nhttps://g.test/a/w.git?a=b\x00", want: true},
+		{name: "query in a rewrite base", out: "url.https://h.test/x?a=b.insteadof\nhttps://elsewhere.test/\x00", want: true},
+		{name: "query in a rewrite value", out: "url.git@h.test:.insteadof\nhttps://h.test/x?a=b\x00", want: true},
+		{name: "query in a push rewrite base", out: "url.https://h.test/x?a=b.pushinsteadof\nhttps://elsewhere.test/\x00", want: true},
+		{name: "query in a push rewrite value", out: "url.git@h.test:.pushinsteadof\nhttps://h.test/x#a\x00", want: true},
+		{name: "scp style with a query", out: "remote.origin.url\ngit@h.test:acme/widget.git?a=b\x00", want: true},
+		{name: "scp style without a user and a query", out: "remote.origin.url\nh.test:acme/widget.git?a=b\x00", want: true},
+		{name: "scp style with an unusual user and a query", out: "remote.origin.url\nmy+user@h.test:acme/widget.git?a=b\x00", want: true},
+		{name: "scp style with a space and a query", out: "remote.origin.url\ngit@h.test:acme/wid get.git?a=b c\x00", want: true},
+		{name: "shorthand with a query", out: "remote.origin.url\nh.test/acme/widget?a=b\x00", want: true},
+		{name: "query followed by a space and a quote", out: "remote.origin.url\nhttps://h.test/x?a=b 'c\x00", want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			run := func(...string) ([]byte, error) { return []byte(tt.out), tt.err }
 			if got := git.ConfiguredURLsCarryCredential(run); got != tt.want {
 				t.Fatalf("ConfiguredURLsCarryCredential() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigPairsCarryCredential(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		config map[string]string
+		want   bool
+	}{
+		{name: "user name with a number sign", config: map[string]string{"user.name": "Team #1"}, want: false},
+		{name: "signing key with a question mark", config: map[string]string{"user.signingkey": "what? #2"}, want: false},
+		{name: "plain email", config: map[string]string{"user.email": "dev@h.test"}, want: false},
+		{name: "rewrite value with a query", config: map[string]string{"url.file:///missing/.insteadOf": "https://h.test/x?a=b"}, want: true},
+		{name: "rewrite value with a fragment and no scheme", config: map[string]string{"url.file:///missing/.pushInsteadOf": "h.test:acme/x#a"}, want: true},
+		{name: "rewrite base with a query", config: map[string]string{"url.file:///missing/?a=b.insteadOf": "https://h.test/"}, want: true},
+		{name: "remote url with a query", config: map[string]string{"remote.origin.url": "h.test/acme/x?a"}, want: true},
+		{name: "other key holding a url with a query", config: map[string]string{"core.hooksPath": "https://h.test/x?a"}, want: true},
+		{name: "other key holding a credential", config: map[string]string{"user.name": "https://u:p@h.test/x"}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := git.ConfigPairsCarryCredential(tt.config); got != tt.want {
+				t.Fatalf("ConfigPairsCarryCredential(%v) = %v, want %v", tt.config, got, tt.want)
 			}
 		})
 	}
@@ -332,6 +374,90 @@ func TestClone_WithACredentialStreamsNothingFromGit(t *testing.T) {
 		if strings.Contains(err.Error(), part) {
 			t.Fatalf("CloneWithConfig() error carries %q: %v", part, err)
 		}
+	}
+}
+
+// TestClone_WithAQueryStreamsNothingFromGit covers the clone URL and a pair
+// given with "-c": a query or a fragment counts like userinfo.
+func TestClone_WithAQueryStreamsNothingFromGit(t *testing.T) {
+	setupGitEnv(t)
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	tests := []struct {
+		name      string
+		remoteURL string
+		config    map[string]string
+	}{
+		{
+			name:      "clone url with a query",
+			remoteURL: "https://h.invalid/acme/widget.git?a=FAKEQUERY",
+			config:    map[string]string{"url.file://" + missing + "/.insteadOf": "https://h.invalid/acme/widget.git?a=FAKEQUERY"},
+		},
+		{
+			name:      "clone url with a fragment",
+			remoteURL: "https://h.invalid/acme/widget.git#FAKEQUERY",
+			config:    map[string]string{"url.file://" + missing + "/.insteadOf": "https://h.invalid/acme/widget.git#FAKEQUERY"},
+		},
+		{
+			name:      "pair with a query in the rewritten prefix",
+			remoteURL: "https://h.invalid/acme/widget.git",
+			config:    map[string]string{"url.file://" + missing + "/.insteadOf": "https://h.invalid/?a=FAKEQUERY"},
+		},
+		{
+			name:      "pair with a query in the base",
+			remoteURL: "https://h.invalid/acme/widget.git",
+			config:    map[string]string{"url.file://" + missing + "/?a=FAKEQUERY.insteadOf": "https://h.invalid/"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var progress bytes.Buffer
+			err := git.CloneWithConfig(context.Background(), tt.remoteURL, filepath.Join(t.TempDir(), "dest"), tt.config, &progress)
+			if err == nil {
+				t.Fatal("CloneWithConfig() succeeded, want a failure")
+			}
+			if progress.Len() != 0 {
+				t.Fatalf("progress = %q, want git's output withheld", progress.String())
+			}
+			if !strings.Contains(err.Error(), "withheld") || strings.Contains(err.Error(), "FAKEQUERY") {
+				t.Fatalf("CloneWithConfig() error = %v, want the output withheld and no query", err)
+			}
+		})
+	}
+}
+
+// TestFetch_WithholdsOutputForAQueryInTheConfiguration puts a query into each
+// URL key git may read.
+func TestFetch_WithholdsOutputForAQueryInTheConfiguration(t *testing.T) {
+	setupGitEnv(t)
+
+	tests := []struct {
+		name string
+		key  string
+		val  string
+	}{
+		{name: "push url", key: "remote.origin.pushurl", val: "https://127.0.0.1:1/x.git?a=FAKEQUERY"},
+		{name: "another remote", key: "remote.other.url", val: "https://127.0.0.1:1/x.git?a=FAKEQUERY"},
+		{name: "rewrite base", key: "url.https://127.0.0.1:1/x?a=FAKEQUERY.insteadOf", val: "https://elsewhere.test/"},
+		{name: "rewrite value", key: "url.https://127.0.0.1:1/.insteadOf", val: "https://elsewhere.test/?a=FAKEQUERY"},
+		{name: "push rewrite base", key: "url.https://127.0.0.1:1/x#FAKEQUERY.pushInsteadOf", val: "https://elsewhere.test/"},
+		{name: "push rewrite value", key: "url.https://127.0.0.1:1/.pushInsteadOf", val: "https://elsewhere.test/#FAKEQUERY"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := t.TempDir()
+			initRepository(t, repo)
+			run(t, repo, "remote", "add", "origin", "https://127.0.0.1:1/acme/widget.git")
+			run(t, repo, "config", tt.key, tt.val)
+
+			err := git.Fetch(context.Background(), repo)
+			if err == nil {
+				t.Fatal("Fetch() succeeded, want a failure for an unreachable remote")
+			}
+			if strings.Contains(err.Error(), "FAKEQUERY") || !strings.Contains(err.Error(), "withheld") {
+				t.Fatalf("Fetch() error = %v, want git's output withheld", err)
+			}
+		})
 	}
 }
 

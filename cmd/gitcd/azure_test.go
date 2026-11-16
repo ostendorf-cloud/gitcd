@@ -240,9 +240,8 @@ func TestAzureDevOpsSync_WithholdsWhenAnyConfiguredUrlCarriesAToken(t *testing.T
 
 // TestAzureDevOpsQuery_WithholdsGitOutput uses the documented form with a
 // query or a fragment, where a secret may sit. The exemption does not apply,
-// so clone and sync withhold git's output. Redact masks only userinfo, so
-// the query itself is not masked in the URL gitcd prints; this test pins
-// the withholding only.
+// so clone and sync withhold git's output. The display of the masked query
+// is covered in query_test.go; this test pins the withholding only.
 func TestAzureDevOpsQuery_WithholdsGitOutput(t *testing.T) {
 	urls := []string{
 		azureHTTPSWithUser + "?access_token=" + azureToken,

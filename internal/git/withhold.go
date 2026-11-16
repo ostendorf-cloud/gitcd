@@ -31,10 +31,11 @@ func gitIn(ctx context.Context, path string) runner {
 	}
 }
 
-// carriesCredential reports whether remoteURL has userinfo, or is a URL that
+// carriesCredential reports whether remoteURL has userinfo, a query or a
+// fragment, which is whenever remote.RedactRemote changes it, or is a URL that
 // could not be parsed and so may hold a credential gitcd cannot find.
 func carriesCredential(remoteURL string) bool {
-	if remote.Redact(remoteURL) != remoteURL {
+	if remote.RedactRemote(remoteURL) != remoteURL {
 		return true
 	}
 	_, err := remote.Parse(remoteURL, nil)
@@ -87,13 +88,31 @@ func configuredURLsCarryCredential(run runner) bool {
 // "url.<base>.insteadOf" key.
 func configPairsCarryCredential(config map[string]string) bool {
 	for key, value := range config {
-		if carriesCredential(value) {
+		if urlLikeKey(key) || strings.Contains(value, "://") {
+			if carriesCredential(value) {
+				return true
+			}
+		} else if remote.Redact(value) != value {
+			// Any other value, such as a user name, is free text: a "?" or
+			// a "#" in it is no query.
 			return true
 		}
 		if rest, ok := strings.CutPrefix(key, "url."); ok {
 			if i := strings.LastIndexByte(rest, '.'); i >= 0 && carriesCredential(rest[:i]) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// urlLikeKey reports whether a configuration key holds a URL: a remote's url
+// or pushurl, or the "insteadOf" and "pushInsteadOf" of a rewrite rule.
+func urlLikeKey(key string) bool {
+	key = strings.ToLower(key)
+	for _, suffix := range []string{".url", ".pushurl", ".insteadof", ".pushinsteadof"} {
+		if strings.HasSuffix(key, suffix) {
+			return true
 		}
 	}
 	return false

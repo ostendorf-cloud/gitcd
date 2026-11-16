@@ -368,7 +368,7 @@ func adoptTargetConflict(ctx context.Context, cfg config.Config, newPath string,
 		return fmt.Sprintf("%s already exists with a remote gitcd cannot parse", newPath)
 	}
 	if existing != want {
-		return fmt.Sprintf("%s already exists with a different remote: %s", newPath, remote.Redact(existingURL))
+		return fmt.Sprintf("%s already exists with a different remote: %s", newPath, remote.RedactRemote(existingURL))
 	}
 	return fmt.Sprintf("%s already exists with the same remote: it looks already adopted", newPath)
 }

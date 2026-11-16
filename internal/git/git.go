@@ -66,7 +66,7 @@ func CloneWithConfig(ctx context.Context, remoteURL, dest string, config map[str
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf(
 			"git: clone %s into %s: %w: %s",
-			remote.Redact(remoteURL), dest, err, foldOutput(captured.String(), withhold),
+			remote.RedactRemote(remoteURL), dest, err, foldOutput(captured.String(), withhold),
 		)
 	}
 	return nil
