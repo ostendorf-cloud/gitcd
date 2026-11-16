@@ -32,6 +32,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # cosign signs the checksums keyless with this run's OIDC token, see
+      # docs/adr/0004-keyless-signing.md. Only this job gets it.
+      id-token: write
     # The tags this run released and the sha256 of the formula built for each,
     # for the homebrew job below. Empty when nothing was released.
     outputs:
@@ -76,8 +79,12 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           app-slug: ${{ steps.app-token.outputs.app-slug }}
 
+      # Only the tools the publish script runs: this job holds the OIDC
+      # token, so it installs nothing else from mise.toml.
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
         if: steps.release-me.outputs.tags != ''
+        with:
+          install_args: go goreleaser cosign
 
       - name: Build, attach and publish the assets for every tag just released
         id: publish

@@ -14,7 +14,7 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/check-homebrew-formula-test.XXXXXXXX")"
 finished=no
 # An old bash can stop a script on an expansion it does not know and still
 # exit 0, so a run that did not reach its last line fails here.
-trap 'rm -rf "${work}"; if [ "${finished}" != yes ]; then echo "test script stopped before its last line" >&2; exit 1; fi' EXIT
+trap 'rm -rf "${work}"; if [ "${finished}" != yes ]; then if [ "${failures:-0}" -eq 0 ]; then echo "test script stopped before its last line" >&2; fi; exit 1; fi' EXIT
 
 tag="v1.0.0"
 file="${work}/gitcd.rb"

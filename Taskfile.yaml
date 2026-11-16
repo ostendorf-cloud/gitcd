@@ -18,7 +18,8 @@ tasks:
   build:release:
     desc: Build a local snapshot release with goreleaser
     cmds:
-      - goreleaser release --snapshot --clean
+      # No OIDC token outside a workflow run, so no signature.
+      - goreleaser release --snapshot --clean --skip=sign
 
   run:
     desc: Run the CLI from source, arguments after --
@@ -117,7 +118,7 @@ tasks:
   test:formula:
     desc: Render the Homebrew formula from a snapshot build and check it
     cmds:
-      - goreleaser release --snapshot --clean --skip=announce,validate,publish
+      - goreleaser release --snapshot --clean --skip=announce,validate,publish,sign
       - |
         f=dist/homebrew/Formula/gitcd.rb
         test -s "$f"

@@ -10,7 +10,7 @@ checker="${script_dir}/check-goreleaser-output.sh"
 finished=no
 # An old bash can stop a script on an expansion it does not know and still
 # exit 0, so a run that did not reach its last line fails here.
-trap 'if [ "${finished}" != yes ]; then echo "test script stopped before its last line" >&2; exit 1; fi' EXIT
+trap 'if [ "${finished}" != yes ]; then if [ "${failures:-0}" -eq 0 ]; then echo "test script stopped before its last line" >&2; fi; exit 1; fi' EXIT
 
 failures=0
 e="$(printf '\033')"

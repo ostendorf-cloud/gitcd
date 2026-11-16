@@ -12,7 +12,10 @@ script="${script_dir}/publish-release-assets.sh"
 # An explicit template, because macOS mktemp ignores TMPDIR without one
 # and always lands in the system temporary directory.
 work="$(mktemp -d "${TMPDIR:-/tmp}/publish-release-assets.XXXXXXXX")"
-trap 'rm -rf "${work}"' EXIT
+finished=no
+# An old bash can stop a script on an expansion it does not know and still
+# exit 0, so a run that did not reach its last line fails here.
+trap 'rm -rf "${work}"; if [ "${finished}" != yes ]; then if [ "${failures:-0}" -eq 0 ]; then echo "test script stopped before its last line" >&2; fi; exit 1; fi' EXIT
 
 fake_bin="${work}/fake-bin"
 mkdir -p "${fake_bin}"
@@ -131,10 +134,42 @@ mkdir -p dist
 echo archive >dist/fixture_linux_amd64.tar.gz
 echo archive >dist/fixture_windows_amd64.zip
 echo checksum >dist/fixture_1.0.0_checksums.txt
+# The signs entry of .goreleaser.yaml signs the checksums file. A tag
+# containing "-unsigned" simulates a run that left no bundle,
+# "-empty-bundle" an empty one, "-two-bundles" a second one, and
+# "-verify-fails" a bundle the verifier rejects (the fake cosign reads the
+# marker file).
+case "${GORELEASER_CURRENT_TAG:-}" in
+*-unsigned*) ;;
+*-empty-bundle*) : >dist/fixture_1.0.0_checksums.txt.sigstore.json ;;
+*) echo bundle >dist/fixture_1.0.0_checksums.txt.sigstore.json ;;
+esac
+case "${GORELEASER_CURRENT_TAG:-}" in
+*-empty-checksums*) : >dist/fixture_1.0.0_checksums.txt ;;
+*-extra-checksums*) echo checksum >dist/other_checksums.txt ;;
+*-two-bundles*) echo bundle >dist/other_checksums.txt.sigstore.json ;;
+*-verify-fails*) : >dist/verify-fails ;;
+esac
 mkdir -p dist/homebrew/Formula
 echo formula >dist/homebrew/Formula/fixture.rb
 FAKE_GORELEASER
 chmod +x "${fake_bin}/goreleaser"
+
+# fake-bin/cosign logs the call. The script finds cosign on PATH like every
+# other tool, there is no switch to turn the verification off, so this fake
+# is how a test chooses the outcome. It fails when goreleaser left the
+# verify-fails marker next to the bundle, and otherwise needs the arguments
+# the documented command uses.
+cat <<'FAKE_COSIGN' >"${fake_bin}/cosign"
+#!/usr/bin/env bash
+echo "cosign $*" >>"${CALL_LOG}"
+if [ -f dist/verify-fails ]; then
+  echo "fake cosign: signature does not match the expected identity" >&2
+  exit 1
+fi
+exit 0
+FAKE_COSIGN
+chmod +x "${fake_bin}/cosign"
 
 # fake-bin/gh logs every call. "release view" answers isDraft from the tag
 # name itself: a tag containing "-draft" or "-published" need no separate
@@ -170,6 +205,10 @@ FAKE_GH
 chmod +x "${fake_bin}/gh"
 
 export CALL_LOG
+export GITHUB_REPOSITORY="acme/gitcd"
+# What a pull request label run carries. The expected identity below must not
+# follow it, so the verify call in every case proves it is ignored.
+export GITHUB_WORKFLOW_REF="acme/gitcd/.github/workflows/release.yaml@refs/pull/1/merge"
 export PATH="${fake_bin}:${PATH}"
 
 failures=0
@@ -237,7 +276,7 @@ run_case() {
   local got_calls
   got_calls="$(cat "${CALL_LOG}")"
   if [ "${got_calls}" != "${want_calls}" ]; then
-    echo "FAIL ${case_name}: calls = ${got_calls@Q}, want ${want_calls@Q}"
+    echo "FAIL ${case_name}: calls = $(printf '%q' "${got_calls}"), want $(printf '%q' "${want_calls}")"
     failures=$((failures + 1))
     return
   fi
@@ -263,7 +302,7 @@ run_failure_case() {
   fi
 
   if ! grep -qF "${want_stderr_substring}" "${work}/stderr"; then
-    echo "FAIL ${case_name}: stderr = $(cat "${work}/stderr"), want it to contain ${want_stderr_substring@Q}"
+    echo "FAIL ${case_name}: stderr = $(cat "${work}/stderr"), want it to contain $(printf '%q' "${want_stderr_substring}")"
     failures=$((failures + 1))
     return
   fi
@@ -271,7 +310,7 @@ run_failure_case() {
   local got_calls
   got_calls="$(cat "${CALL_LOG}")"
   if printf '%s' "${got_calls}" | grep -qE "worktree add|goreleaser|release upload|release edit"; then
-    echo "FAIL ${case_name}: calls = ${got_calls@Q}, want it to stop before building, uploading or publishing"
+    echo "FAIL ${case_name}: calls = $(printf '%q' "${got_calls}"), want it to stop before building, uploading or publishing"
     failures=$((failures + 1))
     return
   fi
@@ -298,7 +337,7 @@ run_partial_failure_case() {
   fi
 
   if ! grep -qF "${want_stderr_substring}" "${work}/stderr"; then
-    echo "FAIL ${case_name}: stderr = $(cat "${work}/stderr"), want it to contain ${want_stderr_substring@Q}"
+    echo "FAIL ${case_name}: stderr = $(cat "${work}/stderr"), want it to contain $(printf '%q' "${want_stderr_substring}")"
     failures=$((failures + 1))
     return
   fi
@@ -318,6 +357,10 @@ run_partial_failure_case() {
   echo "PASS ${case_name}"
 }
 
+# The exact command a reader runs from docs/install.md, with the identity
+# built from the repository and the fixed workflow path and branch.
+verify_call="cosign verify-blob --bundle dist/fixture_1.0.0_checksums.txt.sigstore.json --certificate-identity https://github.com/acme/gitcd/.github/workflows/release.yaml@refs/heads/main --certificate-oidc-issuer https://token.actions.githubusercontent.com dist/fixture_1.0.0_checksums.txt"
+
 run_case "nothing released makes no call at all" "" ""
 
 run_case "a draft release is built, attached and published" "v1.0.0-draft" \
@@ -325,7 +368,8 @@ run_case "a draft release is built, attached and published" "v1.0.0-draft" \
 gh release view v1.0.0-draft --json isDraft --jq .isDraft
 git worktree add --quiet --detach ${work}/worktree-1 v1.0.0-draft
 goreleaser release --clean --skip=announce,validate,publish
-gh release upload v1.0.0-draft dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt dist/homebrew/Formula/fixture.rb --clobber
+${verify_call}
+gh release upload v1.0.0-draft dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt dist/fixture_1.0.0_checksums.txt.sigstore.json dist/homebrew/Formula/fixture.rb --clobber
 gh release edit v1.0.0-draft --draft=false
 git worktree remove ${work}/worktree-1"
 formula_hash="$(printf 'formula\n' | shasum -a 256 | cut -d' ' -f1)"
@@ -333,6 +377,17 @@ check_formula_hashes "the formula hash of the build is a step output" \
   "formula-hashes<<FORMULA_HASHES_EOF
 v1.0.0-draft ${formula_hash}
 FORMULA_HASHES_EOF"
+
+run_case "only the verified checksums file and its bundle are uploaded, not every matching file" \
+  "v1.0.0-draft-extra-checksums" \
+  "git fetch origin --tags --force
+gh release view v1.0.0-draft-extra-checksums --json isDraft --jq .isDraft
+git worktree add --quiet --detach ${work}/worktree-1 v1.0.0-draft-extra-checksums
+goreleaser release --clean --skip=announce,validate,publish
+${verify_call}
+gh release upload v1.0.0-draft-extra-checksums dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt dist/fixture_1.0.0_checksums.txt.sigstore.json dist/homebrew/Formula/fixture.rb --clobber
+gh release edit v1.0.0-draft-extra-checksums --draft=false
+git worktree remove ${work}/worktree-1"
 
 run_case "an already published release is left alone" "v1.0.0-published" \
   "git fetch origin --tags --force
@@ -344,7 +399,8 @@ v2.0.0-published" \
 gh release view v1.0.0-draft --json isDraft --jq .isDraft
 git worktree add --quiet --detach ${work}/worktree-1 v1.0.0-draft
 goreleaser release --clean --skip=announce,validate,publish
-gh release upload v1.0.0-draft dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt dist/homebrew/Formula/fixture.rb --clobber
+${verify_call}
+gh release upload v1.0.0-draft dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt dist/fixture_1.0.0_checksums.txt.sigstore.json dist/homebrew/Formula/fixture.rb --clobber
 gh release edit v1.0.0-draft --draft=false
 git worktree remove ${work}/worktree-1
 gh release view v2.0.0-published --json isDraft --jq .isDraft"
@@ -362,6 +418,79 @@ run_partial_failure_case \
   "v1.0.0-draft-goreleaser-fails" "fake goreleaser: build failed"
 check_formula_hashes "a build that failed records no hash" ""
 
+# check_nothing_published name asserts that the last case neither attached
+# nor published the release, the draft stays as it was for a rerun.
+check_nothing_published() {
+  local case_name="$1"
+  if grep -qE "release upload|release edit" "${CALL_LOG}"; then
+    echo "FAIL ${case_name}: calls = $(printf '%q' "$(cat "${CALL_LOG}")"), want no upload and no publish"
+    failures=$((failures + 1))
+    return
+  fi
+  echo "PASS ${case_name}"
+}
+
+# check_no_verifier_call name asserts that the last case stopped before it
+# asked cosign anything.
+check_no_verifier_call() {
+  local case_name="$1"
+  if grep -q "^cosign " "${CALL_LOG}"; then
+    echo "FAIL ${case_name}: calls = $(printf '%q' "$(cat "${CALL_LOG}")"), want cosign never called"
+    failures=$((failures + 1))
+    return
+  fi
+  echo "PASS ${case_name}"
+}
+
+bundle_error="expected exactly one non-empty checksums signature bundle in dist for"
+
+run_partial_failure_case \
+  "a missing signature bundle stops the script and removes the worktree" \
+  "v1.0.0-draft-unsigned" "${bundle_error} v1.0.0-draft-unsigned"
+check_nothing_published "a missing signature bundle attaches and publishes nothing"
+check_no_verifier_call "a missing signature bundle is not handed to the verifier"
+check_formula_hashes "a build without a signature records no hash" ""
+
+run_partial_failure_case \
+  "an empty signature bundle stops the script and removes the worktree" \
+  "v1.0.0-draft-empty-bundle" "${bundle_error} v1.0.0-draft-empty-bundle"
+check_nothing_published "an empty signature bundle attaches and publishes nothing"
+check_no_verifier_call "an empty signature bundle is not handed to the verifier"
+check_formula_hashes "a build with an empty bundle records no hash" ""
+
+run_partial_failure_case \
+  "two signature bundles stop the script and remove the worktree" \
+  "v1.0.0-draft-two-bundles" "${bundle_error} v1.0.0-draft-two-bundles"
+check_nothing_published "two signature bundles attach and publish nothing"
+check_no_verifier_call "two signature bundles are not handed to the verifier"
+check_formula_hashes "a build with two bundles records no hash" ""
+
+run_partial_failure_case \
+  "an empty checksums file stops the script and removes the worktree" \
+  "v1.0.0-draft-empty-checksums" "the checksums file dist/fixture_1.0.0_checksums.txt for v1.0.0-draft-empty-checksums is missing or empty"
+check_nothing_published "an empty checksums file attaches and publishes nothing"
+check_no_verifier_call "an empty checksums file is not handed to the verifier"
+check_formula_hashes "a build with an empty checksums file records no hash" ""
+
+run_partial_failure_case \
+  "a signature that does not verify stops the script and removes the worktree" \
+  "v1.0.0-draft-verify-fails" "does not verify against the release workflow identity on the main branch"
+if ! grep -qxF "${verify_call}" "${CALL_LOG}"; then
+  echo "FAIL the failing verification did not run the documented command: calls = $(printf '%q' "$(cat "${CALL_LOG}")")"
+  failures=$((failures + 1))
+else
+  echo "PASS the failing verification ran the documented command"
+fi
+check_nothing_published "a signature that does not verify attaches and publishes nothing"
+check_formula_hashes "a build whose signature does not verify records no hash" ""
+
+saved_repository="${GITHUB_REPOSITORY}"
+unset GITHUB_REPOSITORY
+run_failure_case \
+  "a missing GITHUB_REPOSITORY stops the script before it builds anything" \
+  "v1.0.0-draft" "GITHUB_REPOSITORY must name the repository"
+export GITHUB_REPOSITORY="${saved_repository}"
+
 run_partial_failure_case \
   "an upload failure still removes the worktree" \
   "v1.0.0-draft-upload-fails" "fake gh: upload failed"
@@ -375,4 +504,5 @@ if [ "${failures}" -ne 0 ]; then
   exit 1
 fi
 
+finished=yes
 echo "all tests passed"

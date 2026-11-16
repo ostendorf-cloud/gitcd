@@ -116,6 +116,8 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   fetch a script from another repository at release time, where a failure burns a version
   number permanently. Keep it in step with release-me's copy; a third consumer moves it to the
   shared repository. This copy differs on purpose: it also uploads the Homebrew formula
-  goreleaser renders and hands each tag's formula sha256 to the `homebrew` job as the
-  `formula-hashes` step output. release-me's copy does neither, so a port in either direction
-  must keep or drop those parts deliberately.
+  goreleaser renders, verifies the cosign bundle of the checksums against the identity of
+  `release.yaml` on `main` before it uploads anything (`docs/adr/0004-keyless-signing.md`), and
+  hands each tag's formula sha256 to the
+  `homebrew` job as the `formula-hashes` step output. release-me's copy does none of these, so
+  a port in either direction must keep or drop those parts deliberately.

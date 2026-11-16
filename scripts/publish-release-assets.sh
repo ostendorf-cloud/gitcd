@@ -13,6 +13,12 @@
 # release instead goes through gh, which does resolve a draft: "gh release
 # upload" to attach assets, "gh release edit --draft=false" to publish.
 #
+# The same run signs the checksums file keyless with cosign (the signs entry
+# of .goreleaser.yaml, which needs the job's OIDC token). The script refuses
+# to attach or publish anything when the signature bundle is missing or does
+# not verify against the identity of release.yaml on the main branch, so a
+# failure leaves the draft release as it was, for a rerun.
+#
 # The formula for the organisation's Homebrew tap is rendered by the same
 # goreleaser run (skip_upload, see .goreleaser.yaml) and uploaded as one more
 # asset. Pushing it to the tap is publish-homebrew-formula.sh's job, in its
@@ -26,6 +32,10 @@ if [ -z "${TAGS:-}" ]; then
   echo "nothing released, nothing to attach"
   exit 0
 fi
+
+# The signature check below builds its identity from the repository, which
+# the workflow always sets. Without it the script cannot verify, so it stops.
+: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must name the repository the release belongs to}"
 
 git fetch origin --tags --force
 
@@ -124,14 +134,54 @@ while IFS= read -r tag; do
       echo "expected exactly one formula in dist/homebrew/Formula for ${tag}" >&2
       exit 1
     fi
+    # goreleaser signed the checksums file in the same run (the signs entry
+    # of .goreleaser.yaml, cosign keyless). A failed signing step already
+    # failed the build above. This check covers the case where it ran but
+    # left no usable bundle, so a release is never published unsigned. The
+    # globs are unquoted on purpose, an unmatched one stays literal and fails
+    # the -f.
+    signature_files=(dist/*checksums.txt.sigstore.json)
+    if [ "${#signature_files[@]}" -ne 1 ] || [ ! -f "${signature_files[0]}" ] || [ ! -s "${signature_files[0]}" ]; then
+      echo "expected exactly one non-empty checksums signature bundle in dist for ${tag}" >&2
+      exit 1
+    fi
+    signature_file="${signature_files[0]}"
+    checksums_file="${signature_file%.sigstore.json}"
+    if [ ! -s "${checksums_file}" ]; then
+      echo "the checksums file ${checksums_file} for ${tag} is missing or empty" >&2
+      exit 1
+    fi
+
+    # Verify the bundle against the identity docs/install.md tells readers to
+    # use, before anything is attached or published. The identity is built
+    # from the repository and the fixed workflow path and branch, never from
+    # GITHUB_WORKFLOW_REF: that would accept whatever identity this very run
+    # signed with. A run from another ref, such as the pull_request label
+    # run, signs as refs/pull/<n>/merge, fails here, and leaves the draft
+    # release as it is. Re-run the failed push run then.
+    #
+    # There is no switch for this step. cosign is looked up on PATH like
+    # every tool here, so a test puts a fake first on PATH, and no variable
+    # can turn the check off or point it elsewhere.
+    echo "verifying the signature of ${checksums_file} for ${tag}"
+    if ! cosign verify-blob --bundle "${signature_file}" \
+      --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yaml@refs/heads/main" \
+      --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+      "${checksums_file}"; then
+      echo "the signature of ${tag} does not verify against the release workflow identity on the main branch." >&2
+      echo "Nothing was attached or published, the draft release stays. Re-run the failed push run, not a label run." >&2
+      exit 1
+    fi
+
     shasum -a 256 "${formula_files[0]}" | cut -d' ' -f1 >"${worktree_dir}.formula-hash"
 
     echo "attaching assets to the draft release ${tag}"
     # The Homebrew formula goreleaser rendered in this same run rides along
     # as an asset: its checksums are those of the archives uploaded here, so
     # publish-homebrew-formula.sh can push it to the tap later, from its own
-    # job, without rebuilding anything.
-    gh release upload "${tag}" dist/*.tar.gz dist/*.zip dist/*checksums.txt dist/homebrew/Formula/*.rb --clobber
+    # job, without rebuilding anything. The signature bundle of the checksums
+    # file rides along too.
+    gh release upload "${tag}" dist/*.tar.gz dist/*.zip "${checksums_file}" "${signature_file}" dist/homebrew/Formula/*.rb --clobber
 
     echo "publishing ${tag}"
     gh release edit "${tag}" --draft=false
