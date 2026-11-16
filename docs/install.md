@@ -162,8 +162,9 @@ First version:
    ```
 
    It compares every line with the generated template, every URL with this repository's
-   release download of the tag and every `sha256` with the verified checksums file. It was not
-   run on Windows.
+   release download of the tag and every `sha256` with the verified checksums file. The two
+   installer entries, `arm64` and `x64`, may come in either order, since GoReleaser lists them
+   in the order its archives finish. It was not run on Windows.
 2. Fork `microsoft/winget-pkgs` with the personal account and clone it. Create a branch.
 3. Copy the three files unchanged into `manifests/o/OstendorfCloud/gitcd/<version>/`, with
    `<version>` the tag without its `v`. The file names stay as they are.

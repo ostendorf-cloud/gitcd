@@ -303,7 +303,7 @@ reject "a url repeated"
 v_installer="$(s "$(s "$(s "${installer_base}" "Architecture: arm64" "Architecture: @@")" "Architecture: x64" "Architecture: arm64")" "Architecture: @@" "Architecture: x64")"
 reject_with "the architecture labels swapped, urls and shas in place" "archive under the"
 v_installer="$(s "${installer_base}" "${arm_url}" "$(s "${arm_url}" github.com example.invalid)")"
-reject_with "a foreign url under the right architecture" "is not this repository's release download"
+reject_with "a foreign url under the right architecture" "the arm64 entry of the installer file: an InstallerUrl that is not this repository's release download"
 inst_pre="${installer_base%%  - Architecture: arm64*}"
 inst_rest="${installer_base#*  - Architecture: arm64}"
 inst_arm_body="${inst_rest%%  - Architecture: x64*}"
@@ -311,7 +311,24 @@ inst_rest2="${inst_rest#*  - Architecture: x64}"
 inst_x64_body="${inst_rest2%%ManifestType: installer*}"
 inst_post="ManifestType: installer${inst_rest2#*ManifestType: installer}"
 v_installer="${inst_pre}  - Architecture: x64${inst_x64_body}  - Architecture: arm64${inst_arm_body}${inst_post}"
-reject_with "the x64 block before the arm64 block, each url under its own architecture" "must list the arm64 archive, then the amd64 archive"
+accept "the x64 entry before the arm64 entry, each url under its own architecture"
+v_installer="${inst_pre}  - Architecture: x64${inst_x64_body}  - Architecture: arm64${inst_arm_body}${inst_post}"
+v_installer="$(s "${v_installer}" "${amd_sha}" "    InstallerSha256: ${sha_other}")"
+reject_with "the x64 entry first with a sha256 that differs from the checksums file" "differs from the checksums file"
+v_installer="${inst_pre}  - Architecture: x64${inst_x64_body}  - Architecture: arm64${inst_arm_body}${inst_post}"
+v_installer="$(s "${v_installer}" "${amd_url}" "$(s "${amd_url}" github.com example.invalid)")"
+reject_with "the x64 entry first with a foreign url, named by its entry" "the x64 entry of the installer file: an InstallerUrl that is not this repository's release download"
+v_installer="${inst_pre}  - Architecture: x64${inst_x64_body}  - Architecture: arm64${inst_arm_body}${inst_post}"
+v_installer="$(s "${v_installer}" "Architecture: x64" "Architecture: @@")"
+v_installer="$(s "${v_installer}" "Architecture: arm64" "Architecture: x64")"
+v_installer="$(s "${v_installer}" "Architecture: @@" "Architecture: arm64")"
+reject_with "the architecture labels swapped with the entries in the other order" "archive under the"
+v_installer="$(s "${installer_base}" "  - Architecture: arm64" "  - Architecture: x64")"
+reject_with "two x64 entries and no arm64 entry" "once each, has 0 and 2"
+v_installer="$(s "${installer_base}" "${amd_sha}" "${amd_sha}${nl}${amd_url}${nl}${amd_sha}")"
+reject_with "the url and sha256 of one entry twice" "must list the arm64 archive and the amd64 archive once each"
+v_installer="$(s "${installer_base}" "  - Architecture: x64" "  - Architecture: arm64")"
+reject_with "two arm64 entries and no x64 entry" "once each, has 2 and 0"
 
 # sha256 lines.
 v_installer="$(s "${installer_base}" "${arm_sha}${nl}" "")"
@@ -367,6 +384,17 @@ report "a NUL byte hiding a key at the end of a line" reject
 write_set
 printf '%s' "${locale_base}" >"${manifest}/${id}.locale.en-US.yaml"
 report "a final line without a newline" reject
+
+# The installer file has no skeleton diff of its own that sees a missing final
+# newline, since its entries are rebuilt with one, so the newline rule alone
+# decides here.
+write_set
+printf '%s' "${installer_base}" >"${manifest}/${id}.installer.yaml"
+report "an installer file without a final newline" reject
+if ! grep -qF "does not end with a newline" "${work}/stderr"; then
+  echo "FAIL an installer file without a final newline: stderr = $(cat "${work}/stderr"), want the newline rule"
+  failures=$((failures + 1))
+fi
 
 if [ "${failures}" -ne 0 ]; then
   finished=yes
