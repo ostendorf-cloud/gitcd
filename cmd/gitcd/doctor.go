@@ -226,6 +226,21 @@ func movedProfileTargetName(cfg config.Config) string {
 	return defaultMovedProfileName
 }
 
+// repairedByRerender reports whether one re-render of the managed files
+// repairs f. A root symlink finding counts only when it is fixable: the
+// variant for a link target that cannot be rendered stays outstanding
+// however often the files are rendered.
+func repairedByRerender(f doctor.Finding) bool {
+	switch f.Kind {
+	case doctor.KindManagedFileMissing, doctor.KindManagedFileStale:
+		return true
+	case doctor.KindRootSymlink:
+		return f.Fixable
+	default:
+		return false
+	}
+}
+
 // applyFixes repairs every mechanical finding in all, splitting the
 // input into what was fixed and what is still outstanding. Every
 // managed file finding is repaired by one re-render, since
@@ -237,7 +252,7 @@ func applyFixes(
 ) (fixed, outstanding []doctor.Finding) {
 	hasManaged := false
 	for _, f := range all {
-		if f.Kind == doctor.KindManagedFileMissing || f.Kind == doctor.KindManagedFileStale {
+		if repairedByRerender(f) {
 			hasManaged = true
 			break
 		}
@@ -267,7 +282,7 @@ func applyFixes(
 
 	for _, f := range all {
 		switch {
-		case (f.Kind == doctor.KindManagedFileMissing || f.Kind == doctor.KindManagedFileStale) && managedWritten:
+		case repairedByRerender(f) && managedWritten:
 			fixed = append(fixed, f)
 		case f.Kind == doctor.KindPathCase && dryRun:
 			oldAncestor, newAncestor := doctor.FirstDifferingSegment(f.Path, f.WantPath)

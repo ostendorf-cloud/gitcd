@@ -64,6 +64,15 @@ const (
 	// inside it, since re-rendering always reproduces the current,
 	// correctly ordered content.
 	KindManagedFileStale Kind = "managed-file-stale"
+	// KindRootSymlink is a configured root that reaches its directory
+	// through a symlink, while the include file on disk has no gitdir
+	// condition for the resolved path. git matches the path it sees, so
+	// the profile rules do not apply to a repository entered through the
+	// real path. "doctor --fix" repairs it with the same re-render that
+	// repairs a stale managed file. A resolved path the root check
+	// refuses, a quote or a glob character in a link target, cannot be
+	// rendered at all: that finding is reported, never fixable.
+	KindRootSymlink Kind = "root-symlink"
 	// KindGlobalIdentityKey is an identity key the global git
 	// configuration sets directly: "user.useConfigOnly" cannot suppress
 	// it, so it applies to every repository gitcd manages, one some rule
@@ -428,7 +437,63 @@ func CheckManagedFiles(cfg config.Config, home string) ([]Finding, error) {
 			})
 		}
 	}
+	findings = append(findings, checkRootSymlink(cfg, includePath, rendered[includePath])...)
 	return findings, nil
+}
+
+// checkRootSymlink reports KindRootSymlink when cfg.Root reaches its
+// directory through a symlink and the include file on disk carries no
+// gitdir condition for the resolved root. git matches a gitdir condition
+// against the path it sees for a repository, so a file rendered before the
+// root was a symlink, or by an older gitcd, matches nothing for a
+// repository entered through the real path: the profile silently does not
+// apply. A file that already holds the resolved condition, or a
+// configuration with no rule, yields nothing; the file being missing or
+// out of date is reported by CheckManagedFiles itself, so this finding
+// only names the effect.
+//
+// The drift check does not see this: it compares the file with what Render
+// produces, which includes the resolved condition, so a file lacking it is
+// stale and this finding is reported next to that one.
+func checkRootSymlink(cfg config.Config, includePath, want string) []Finding {
+	if len(cfg.Rules) == 0 {
+		return nil
+	}
+	resolved, err := gitconfig.RootResolution(cfg.Root)
+	if resolved == "" {
+		return nil
+	}
+	if err != nil {
+		// The resolved path cannot be rendered, so no apply repairs this:
+		// the finding stays until the link or the root changes.
+		return []Finding{{
+			Kind: KindRootSymlink,
+			Path: cfg.Root,
+			Message: fmt.Sprintf(
+				"root %q reaches %q through a symlink, which cannot be rendered into a gitdir condition (%v); "+
+					"git matches the real path, so the profile rules do not apply to a repository entered through it, "+
+					"and \"gitcd apply\" renders the condition for the root as configured only",
+				cfg.Root, resolved, err,
+			),
+		}}
+	}
+	needle := "gitdir/i:" + filepath.ToSlash(resolved) + "/"
+	if got, err := os.ReadFile(includePath); err == nil && strings.Contains(string(got), needle) {
+		return nil
+	}
+	if !strings.Contains(want, needle) {
+		return nil
+	}
+	return []Finding{{
+		Kind:    KindRootSymlink,
+		Path:    includePath,
+		Fixable: true,
+		Message: fmt.Sprintf(
+			"root %s reaches %s through a symlink and %s has no gitdir condition for the resolved path; "+
+				"git matches the real path, so the profile rules do not apply to a repository entered through %s until \"gitcd apply\" renders both",
+			cfg.Root, resolved, includePath, resolved,
+		),
+	}}
 }
 
 // CheckOptedInKeys reports one KindOptedInKey finding per profile key

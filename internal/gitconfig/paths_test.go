@@ -14,7 +14,11 @@ import (
 // that is not, and a path with no drive letter is not absolute on Windows.
 var (
 	homeDir = absPath("/home/simon")
-	rootDir = absPath("/home/simon/Code")
+	// rootDir is not under /home: Render also renders the root with its
+	// symlinks resolved, and /home is a link into /System/Volumes/Data on
+	// macOS, so a root there would render a second condition on that host
+	// only.
+	rootDir = absPath("/srv/simon/Code")
 )
 
 // absPath turns a slash separated Unix path into an absolute path of the
@@ -35,5 +39,6 @@ func unixPaths(text string) string {
 	}
 	text = strings.ReplaceAll(text, `\\`, "/")
 	text = strings.ReplaceAll(text, `\`, "/")
+	text = strings.ReplaceAll(text, "C:/srv/", "/srv/")
 	return strings.ReplaceAll(text, "C:/home/", "/home/")
 }
