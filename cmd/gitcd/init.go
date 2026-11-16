@@ -72,6 +72,28 @@ func writeBackup(path string, content []byte) error {
 	return f.Close()
 }
 
+// backupFile is the one place that decides whether a file gets a backup and
+// what is printed about it, for the real run and for --dry-run alike, so the
+// announcement cannot drift from the action. Content that is empty, which
+// includes a file that does not exist, gets no backup and no line. A dry run
+// prints "would back up <path>" and writes nothing. A real run writes the
+// backup and returns its path.
+func backupFile(dryRun bool, stdout io.Writer, path string, content []byte) (string, error) {
+	if len(content) == 0 {
+		return "", nil
+	}
+	if dryRun {
+		fmt.Fprintf(stdout, "would back up %s\n", path)
+		return "", nil
+	}
+	backupPath := backupPathFor(path)
+	if err := writeBackup(backupPath, content); err != nil {
+		return "", err
+	}
+	fmt.Fprintf(stdout, "backed up %s to %s\n", path, backupPath)
+	return backupPath, nil
+}
+
 // runInit implements "gitcd init". Beyond adding the "include.path" line
 // described below, it first detects every identity key the global git
 // configuration sets directly: "user.useConfigOnly" only stops git from
@@ -151,18 +173,19 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// would either collide with the first, since both resolve to the
 	// same once per second timestamp, or, if it did not collide, record
 	// an already modified file instead of the original one.
-	var backupPath string
+	var globalBackedUp bool
 	backupGlobalConfig := func() error {
-		if backupPath != "" || len(content) == 0 {
+		if globalBackedUp {
 			return nil
 		}
-		backupPath = backupPathFor(globalPath)
-		if err := writeBackup(backupPath, content); err != nil {
-			backupPath = ""
+		backupPath, err := backupFile(*dryRun, stdout, globalPath, content)
+		if err != nil {
 			return fmt.Errorf("back up %s: %w", globalPath, err)
 		}
-		logger.Debug("backed up the global git configuration file", "path", backupPath)
-		fmt.Fprintf(stdout, "backed up %s to %s\n", globalPath, backupPath)
+		globalBackedUp = true
+		if backupPath != "" {
+			logger.Debug("backed up the global git configuration file", "path", backupPath)
+		}
 		return nil
 	}
 
@@ -175,8 +198,9 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		reportGlobalIdentityKeys(stdout, globalPath, found, after, target)
 
 		move := decideMove(*moveIdentity, stdin, stderr, found, target)
+		var cfgPath string
 		if move {
-			cfgPath, err := config.Path()
+			cfgPath, err = config.Path()
 			if err != nil {
 				fmt.Fprintf(stderr, "gitcd init: %v\n", err)
 				return 1
@@ -196,6 +220,21 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, "not moving them: pass --move-identity=yes to move them without a prompt, or --move-identity=ask to be asked")
 		case *dryRun:
 			fmt.Fprintf(stdout, "would move %s into profile %q and remove them from %s\n", describeIdentityKeys(found), target, globalPath)
+			// The same backups the real move makes, announced through the
+			// same code.
+			if err := backupGlobalConfig(); err != nil {
+				fmt.Fprintf(stderr, "gitcd init: %v\n", err)
+				return 1
+			}
+			existingYAML, err := os.ReadFile(cfgPath)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				fmt.Fprintf(stderr, "gitcd init: read %s: %v\n", cfgPath, err)
+				return 1
+			}
+			if _, err := backupFile(true, stdout, cfgPath, existingYAML); err != nil {
+				fmt.Fprintf(stderr, "gitcd init: back up %s: %v\n", cfgPath, err)
+				return 1
+			}
 		default:
 			if err := moveGlobalIdentity(ctx, found, target, globalPath, backupGlobalConfig, stdout); err != nil {
 				fmt.Fprintf(stderr, "gitcd init: %v\n", err)
@@ -229,14 +268,13 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	if *dryRun {
-		fmt.Fprintf(stdout, "would back up %s and add:\n\n[include]\n\tpath = %s\n", globalPath, includePath)
-		return 0
-	}
-
 	if err := backupGlobalConfig(); err != nil {
 		fmt.Fprintf(stderr, "%v\n", err)
 		return 1
+	}
+	if *dryRun {
+		fmt.Fprintf(stdout, "would add to %s:\n\n[include]\n\tpath = %s\n", globalPath, includePath)
+		return 0
 	}
 
 	// The managed directory holds identity data, so it is created private
@@ -437,12 +475,8 @@ func moveGlobalIdentity(
 	if err := backupGlobalConfig(); err != nil {
 		return fmt.Errorf("%w: aborted before changing any file", err)
 	}
-	if len(existingYAML) > 0 {
-		cfgBackupPath := backupPathFor(cfgPath)
-		if err := writeBackup(cfgBackupPath, existingYAML); err != nil {
-			return fmt.Errorf("back up %s: %w: aborted before changing any file", cfgPath, err)
-		}
-		fmt.Fprintf(stdout, "backed up %s to %s\n", cfgPath, cfgBackupPath)
+	if _, err := backupFile(false, stdout, cfgPath, existingYAML); err != nil {
+		return fmt.Errorf("back up %s: %w: aborted before changing any file", cfgPath, err)
 	}
 
 	keys := make(map[string]string, len(found))
