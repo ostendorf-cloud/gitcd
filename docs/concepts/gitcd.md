@@ -95,6 +95,3 @@
   revisited it.
 - Should gitcd manage an allowed signers file for SSH signature verification. Next step: open an
   issue if a user asks for verification, not before.
-- Azure DevOps URL forms, SSH host `ssh.dev.azure.com` with path `v3/{org}/{project}/{repo}`,
-  and HTTPS `dev.azure.com/{org}/{project}/_git/{repo}`, are implemented but unverified against
-  a real remote. Next step: confirm against an actual Azure DevOps repository.
