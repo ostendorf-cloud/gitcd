@@ -95,3 +95,50 @@ func TestGitValue(t *testing.T) {
 		})
 	}
 }
+
+// identityVars is every variable SetHome has to unset. The list is spelled
+// out here, not read from the package, so a variable dropped from the
+// package fails this test.
+var identityVars = []string{
+	"GIT_AUTHOR_NAME",
+	"GIT_AUTHOR_EMAIL",
+	"GIT_COMMITTER_NAME",
+	"GIT_COMMITTER_EMAIL",
+	"EMAIL",
+	"GIT_CONFIG_COUNT",
+	"GIT_CONFIG_PARAMETERS",
+}
+
+// TestSetHome_UnsetsTheGitIdentityVariablesAndRestoresThem exports every
+// identity variable, calls SetHome in a subtest and asserts the variables
+// are not just empty but absent, and back with their value afterwards.
+func TestSetHome_UnsetsTheGitIdentityVariablesAndRestoresThem(t *testing.T) {
+	for _, name := range identityVars {
+		t.Setenv(name, "exported-by-the-shell")
+	}
+	// One variable that was never exported must stay absent afterwards.
+	const absent = "GIT_CONFIG_PARAMETERS"
+	t.Setenv(absent, "")
+	if err := os.Unsetenv(absent); err != nil {
+		t.Fatalf("unset %s: %v", absent, err)
+	}
+
+	t.Run("inside the test", func(t *testing.T) {
+		testenv.SetHome(t, t.TempDir())
+		for _, name := range identityVars {
+			if value, ok := os.LookupEnv(name); ok {
+				t.Errorf("%s = %q after SetHome, want it unset", name, value)
+			}
+		}
+	})
+
+	for _, name := range identityVars {
+		value, ok := os.LookupEnv(name)
+		switch {
+		case name == absent && ok:
+			t.Errorf("%s = %q after the test, want it still unset", name, value)
+		case name != absent && value != "exported-by-the-shell":
+			t.Errorf("%s = %q (set %v) after the test, want the exported value back", name, value, ok)
+		}
+	}
+}

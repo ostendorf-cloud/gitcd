@@ -78,10 +78,12 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   function can wrap them.
 - Every command that writes supports `--dry-run`.
 - Tests: table driven, git repositories generated under a temporary directory, `HOME`,
-  `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM=1` controlled, no network. A test sets the home
-  directory through `internal/testenv.SetHome`, never `t.Setenv("HOME", ...)` alone: Windows
-  reads `USERPROFILE`. Test paths must be absolute on Windows too, and a test asserting Unix
-  permission bits or a symlink skips on Windows with a reason.
+  `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM=1` controlled, the git identity variables
+  (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `EMAIL`, `GIT_CONFIG_COUNT`, `GIT_CONFIG_PARAMETERS`)
+  unset, no network. A test sets the home directory through `internal/testenv.SetHome`, which
+  also unsets them, never `t.Setenv("HOME", ...)` alone: Windows reads `USERPROFILE`. Test
+  paths must be absolute on Windows too, and a test asserting Unix permission bits or a symlink
+  skips on Windows with a reason.
 - Errors wrap with `%w` and name the component.
 - Logging through `log/slog`, configured in `main`, quiet by default, `--verbose` for debug.
 - Secrets never reach a log line or an error message gitcd constructs itself.

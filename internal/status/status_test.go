@@ -282,7 +282,7 @@ func TestInspect_DetachedHEAD(t *testing.T) {
 }
 
 func TestInspect_WrapsTheUnderlyingErrorForANonRepository(t *testing.T) {
-	t.Parallel()
+	setupGitEnv(t)
 
 	dir := t.TempDir()
 	if _, err := status.Inspect(context.Background(), dir); err == nil {

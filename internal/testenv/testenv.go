@@ -61,12 +61,59 @@ func FileURL(path string) string {
 	return "file://" + path
 }
 
+// gitIdentityVars are the variables that hand git an identity or a
+// configuration value ahead of every configuration file, so a test
+// pointing git at its own global file still sees the developer's shell.
+//
+//   - GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and
+//     GIT_COMMITTER_EMAIL beat user.name and user.email, and make a commit
+//     succeed where user.useConfigOnly expects a refusal.
+//   - EMAIL is git's fallback for both email addresses.
+//   - GIT_CONFIG_COUNT switches on GIT_CONFIG_KEY_<n> and
+//     GIT_CONFIG_VALUE_<n>, which inject any key, user.name and
+//     user.useConfigOnly included, above the files. Without the count git
+//     reads neither, so the count alone is cleared.
+//   - GIT_CONFIG_PARAMETERS carries the "-c" options of a parent git
+//     process, as when the suite runs from a git hook or "rebase --exec".
+//
+// The dates GIT_AUTHOR_DATE and GIT_COMMITTER_DATE are left alone: they
+// change a commit's timestamp, never who made it or whether it succeeds.
+var gitIdentityVars = []string{
+	"GIT_AUTHOR_NAME",
+	"GIT_AUTHOR_EMAIL",
+	"GIT_COMMITTER_NAME",
+	"GIT_COMMITTER_EMAIL",
+	"EMAIL",
+	"GIT_CONFIG_COUNT",
+	"GIT_CONFIG_PARAMETERS",
+}
+
+// ClearGitIdentity unsets every variable in gitIdentityVars for the
+// duration of the test. It unsets rather than empties them: git treats an
+// empty GIT_AUTHOR_NAME as set and refuses with "empty ident name not
+// allowed", which is no more the unset case than the exported value is.
+// testing has no Unsetenv, so t.Setenv registers the restore of the old
+// value, or its absence, and os.Unsetenv then removes the variable.
+// SetHome calls it, so every test that isolates its home isolates the
+// identity too.
+func ClearGitIdentity(t testing.TB) {
+	t.Helper()
+	for _, name := range gitIdentityVars {
+		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("unset %s: %v", name, err)
+		}
+	}
+}
+
 // SetHome points every variable a Go program or git reads the home
 // directory from at home, for the duration of the test. Unix reads HOME.
 // Windows reads USERPROFILE, which is what os.UserHomeDir returns there,
-// and APPDATA and LOCALAPPDATA for per user configuration.
+// and APPDATA and LOCALAPPDATA for per user configuration. It also clears
+// the git identity variables, see ClearGitIdentity.
 func SetHome(t testing.TB, home string) {
 	t.Helper()
+	ClearGitIdentity(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("APPDATA", home)
