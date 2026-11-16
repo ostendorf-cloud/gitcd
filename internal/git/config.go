@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -351,6 +352,95 @@ scan:
 	return strings.TrimSpace(b.String())
 }
 
+// gitcdPathMatcher returns a function reporting whether the raw value of
+// an include "path" key names includePath. It accepts the three forms of a
+// Windows path, native, with doubled backslashes and with forward slashes,
+// and a path starting with "~/", which git expands against the home
+// directory. Git reads HOME for that. os.UserHomeDir reads HOME as well,
+// and USERPROFILE on Windows, where git falls back to it.
+//
+// A value no string form matches still names the include file when its
+// absolute or "~/" path, cleaned, is the same file on disk as includePath:
+// a "..", a symlinked directory or a symlinked home directory spell the
+// same file differently. "~user/" is not expanded, since it needs the
+// account database, and a relative path depends on the file it sits in.
+func gitcdPathMatcher(includePath string) func(raw string) bool {
+	forms := []string{
+		includePath,
+		strings.ReplaceAll(includePath, `\`, `\\`),
+		strings.ReplaceAll(includePath, `\`, "/"),
+	}
+	slashed := func(s string) string {
+		return strings.ReplaceAll(strings.ReplaceAll(s, `\\`, "/"), `\`, "/")
+	}
+	home, homeErr := os.UserHomeDir()
+	home = strings.TrimRight(home, `/\`)
+	return func(raw string) bool {
+		if includePath == "" {
+			return false
+		}
+		text := configValueText(raw)
+		if slices.Contains(forms, text) {
+			return true
+		}
+		candidate := text
+		if strings.HasPrefix(text, "~/") {
+			if homeErr != nil || home == "" {
+				return false
+			}
+			if slashed(home+text[1:]) == slashed(includePath) {
+				return true
+			}
+			candidate = home + text[1:]
+		}
+		return sameFileAsInclude(candidate, includePath)
+	}
+}
+
+// sameFileAsInclude reports whether candidate, an absolute path as written
+// in a configuration file, is the file at includePath. A path that does not
+// exist, or is not absolute, is not.
+func sameFileAsInclude(candidate, includePath string) bool {
+	if runtime.GOOS == "windows" {
+		candidate = strings.ReplaceAll(candidate, `\\`, `\`)
+	}
+	candidate = filepath.Clean(filepath.FromSlash(candidate))
+	if !filepath.IsAbs(candidate) {
+		return false
+	}
+	want, err := os.Stat(includePath)
+	if err != nil {
+		return false
+	}
+	got, err := os.Stat(candidate)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(want, got)
+}
+
+// NamesGitcdInclude reports whether content has an "[include]" or an
+// "[includeIf]" section whose "path" names includePath, in any form
+// IdentityKeysAfterGitcdInclude accepts. It parses the file's sections,
+// so a path in a comment or under another key does not count.
+func NamesGitcdInclude(content []byte, includePath string) bool {
+	namesGitcd := gitcdPathMatcher(includePath)
+	inInclude := false
+	for _, line := range strings.Split(string(content), "\n") {
+		if m := configSectionHeader.FindStringSubmatch(line); m != nil {
+			inInclude = (strings.EqualFold(m[1], "include") && m[2] == "") || strings.EqualFold(m[1], "includeIf")
+			continue
+		}
+		if !inInclude {
+			continue
+		}
+		if m := configKeyLine.FindStringSubmatch(line); m != nil && strings.EqualFold(m[1], "path") && namesGitcd(m[3]) {
+			return true
+		}
+	}
+	return false
+}
+
 // IdentityKeysAfterInclude is IdentityKeyAfterInclude, reporting every
 // key in keys that sits after the last bare "[include]" section, in file
 // order, rather than only the first it finds: "git config --global --add"
@@ -365,53 +455,102 @@ func IdentityKeysAfterInclude(content []byte, keys []string) ([]string, error) {
 // that knows the path of the include file "gitcd apply" renders. Git takes
 // the last value, so a key loses to a profile only while the gitcd include
 // sits after it. When a bare "[include]" section has a "path" whose value
-// equals includePath, written natively, with doubled backslashes or with
-// forward slashes, quoted or followed by a comment or not, the
-// last such section is the line a key must precede: a key after it wins
-// over every profile even when a foreign include follows. Without one,
-// the last bare "[include]" section is the line, as in
-// IdentityKeysAfterInclude. An empty includePath names no section.
+// equals includePath, written natively, with doubled backslashes, with
+// forward slashes or as a path under the home directory starting with
+// "~/", quoted or followed by a comment or not, the last such section is
+// the line a key must precede: a key after it wins over every profile
+// even when a foreign include follows. Without one, the last bare
+// "[include]" section is the line, as in IdentityKeysAfterInclude. An
+// empty includePath names no section.
+//
+// An "[includeIf]" section whose path names the gitcd include counts too,
+// but git loads it only where its condition holds. It moves the line a key
+// must precede only when no gitcd include, bare or conditional, sits before
+// the key. A key after it then wins over every profile whether or not the
+// condition holds, since a repository the condition misses loads no
+// profile at all. A key before it loses to a profile where the condition
+// holds and still applies elsewhere, which is what "not after" reports. A
+// key after a gitcd include with only an "[includeIf]" following is
+// reported as after: a repository the later condition misses keeps the
+// key, and one it holds loads the profile again, so the key is reported
+// even where it loses. That over-warns on the safe side. A later bare gitcd
+// include always loads the profiles, so a key before it is not after.
+// "~user/" is not expanded, since it needs the account database.
 func IdentityKeysAfterGitcdInclude(content []byte, keys []string, includePath string) ([]string, error) {
 	lines := strings.Split(string(content), "\n")
-
-	// A Windows path appears natively, with every backslash doubled as git
-	// writes it, or with forward slashes, which git accepts as well.
-	forms := []string{
-		includePath,
-		strings.ReplaceAll(includePath, `\`, `\\`),
-		strings.ReplaceAll(includePath, `\`, "/"),
-	}
+	namesGitcd := gitcdPathMatcher(includePath)
 
 	lastIncludeEnd := -1
-	lastGitcdEnd := -1
-	inBareInclude := false
+	// Where the gitcd include sections sit: the first line of any kind, the
+	// last line of a bare one and the last line of any kind.
+	firstGitcd, lastBareGitcdEnd, lastGitcdEnd := -1, -1, -1
+	// kind is the section the current line belongs to.
+	const (
+		otherSection = iota
+		bareInclude
+		includeIfSection
+	)
+	kind := otherSection
 	holdsGitcd := false
 	for i, line := range lines {
 		if m := configSectionHeader.FindStringSubmatch(line); m != nil {
-			inBareInclude = strings.EqualFold(m[1], "include") && m[2] == ""
+			switch {
+			case strings.EqualFold(m[1], "include") && m[2] == "":
+				kind = bareInclude
+			case strings.EqualFold(m[1], "includeIf"):
+				kind = includeIfSection
+			default:
+				kind = otherSection
+			}
 			holdsGitcd = false
 			continue
 		}
-		if !inBareInclude {
+		if kind == otherSection {
 			continue
 		}
-		lastIncludeEnd = i
+		if kind == bareInclude {
+			lastIncludeEnd = i
+		}
 		if includePath == "" {
 			continue
 		}
 		if m := configKeyLine.FindStringSubmatch(line); m != nil && strings.EqualFold(m[1], "path") &&
-			slices.Contains(forms, configValueText(m[3])) {
+			namesGitcd(m[3]) {
 			holdsGitcd = true
+			if firstGitcd == -1 {
+				firstGitcd = i
+			}
 		}
 		if holdsGitcd {
 			lastGitcdEnd = i
+			if kind == bareInclude {
+				lastBareGitcdEnd = i
+			}
 		}
 	}
-	if lastGitcdEnd != -1 {
-		lastIncludeEnd = lastGitcdEnd
-	}
-	if lastIncludeEnd == -1 {
+	if lastIncludeEnd == -1 && lastGitcdEnd == -1 {
 		return nil, nil
+	}
+
+	// after reports whether a key on line i wins over every profile.
+	after := func(i int) bool {
+		switch {
+		case lastBareGitcdEnd > i:
+			// An unconditional gitcd include follows and loads every profile.
+			return false
+		case firstGitcd != -1 && firstGitcd < i:
+			// A gitcd include sits before the key. An "[includeIf]" after
+			// it loads the profiles again only where its condition holds,
+			// so elsewhere the key wins. Where the condition holds the key
+			// loses, which this over-warns about. The warning is the safe
+			// side, since the key can win.
+			return true
+		case lastGitcdEnd > i:
+			// Only an "[includeIf]" follows. Where its condition holds the
+			// profile wins, and elsewhere no profile is loaded at all.
+			return false
+		}
+		return i > lastIncludeEnd
 	}
 
 	wanted := make(map[string]string, len(keys))
@@ -422,12 +561,12 @@ func IdentityKeysAfterGitcdInclude(content []byte, keys []string, includePath st
 	var found []string
 	seen := make(map[string]bool, len(keys))
 	section := ""
-	for _, line := range lines[lastIncludeEnd+1:] {
+	for i, line := range lines {
 		if m := configSectionHeader.FindStringSubmatch(line); m != nil {
 			section = strings.ToLower(m[1])
 			continue
 		}
-		if section == "" {
+		if section == "" || !after(i) {
 			continue
 		}
 		m := configKeyLine.FindStringSubmatch(line)

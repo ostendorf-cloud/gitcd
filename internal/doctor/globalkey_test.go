@@ -6,6 +6,7 @@ package doctor_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -53,6 +54,9 @@ func TestCheckGlobal_MessageMatchesWhatGitResolves(t *testing.T) {
 		includeFile string
 		profileFile string
 		defaultFile string
+		// symlinkDir links "linkdir" in the home directory to itself, for
+		// {includeViaLink}.
+		symlinkDir bool
 		// want holds the value git resolves per key, wantAfter whether the
 		// key sits after an include section.
 		want      map[string]string
@@ -155,6 +159,153 @@ func TestCheckGlobal_MessageMatchesWhatGitResolves(t *testing.T) {
 			want:        map[string]string{"user.email": profileEmail, "user.name": globalName},
 			wantAfter:   map[string]bool{"user.email": false, "user.name": true},
 		},
+		{
+			name:        "the gitcd include is a tilde path and the key sits after it",
+			global:      "{includeTilde}[user]\n\temail = " + globalEmail + "\n",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
+		{
+			name:        "the gitcd include is a tilde path and the key sits before it",
+			global:      "[user]\n\temail = " + globalEmail + "\n{includeTilde}",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": profileEmail},
+			wantAfter:   map[string]bool{"user.email": false},
+		},
+		{
+			name:        "the tilde include sits before a key and a foreign include follows",
+			global:      "{includeTilde}[user]\n\temail = " + globalEmail + "\n[include]\n\tpath = {foreign}\n",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
+		{
+			name:        "the gitcd include sits in an includeIf that holds and the key sits after it",
+			global:      "{includeIf}[user]\n\temail = " + globalEmail + "\n",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
+		{
+			name:        "the gitcd include sits in an includeIf that holds and the key sits before it",
+			global:      "[user]\n\temail = " + globalEmail + "\n{includeIf}",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": profileEmail},
+			wantAfter:   map[string]bool{"user.email": false},
+		},
+		{
+			name:        "the gitcd include sits in an includeIf that does not hold and the key sits before it",
+			global:      "[user]\n\temail = " + globalEmail + "\n{includeIfElsewhere}",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": false},
+		},
+		{
+			name:        "the gitcd include sits in an includeIf that does not hold and the key sits after it",
+			global:      "{includeIfElsewhere}[user]\n\temail = " + globalEmail + "\n",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
+		{
+			name:        "a foreign include follows an includeIf holding the gitcd include and the key sits before it",
+			global:      "[user]\n\temail = " + globalEmail + "\n{includeIf}[include]\n\tpath = {foreign}\n",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": profileEmail},
+			wantAfter:   map[string]bool{"user.email": false},
+		},
+		{
+			name:        "a conditional gitcd include that misses follows a bare one and the key sits between them",
+			global:      "{include}[user]\n\temail = " + globalEmail + "\n{includeIfElsewhere}",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
+		{
+			name:        "a branch conditional gitcd include that misses follows a bare one and the key sits between them",
+			global:      "{include}[user]\n\temail = " + globalEmail + "\n{includeIfBranch}",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
+		{
+			name:        "a conditional gitcd include that misses follows one that holds and the key sits between them",
+			global:      "{includeIf}[user]\n\temail = " + globalEmail + "\n{includeIfElsewhere}",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
+		{
+			// Git resolves the profile here, so the key is reported as
+			// after although it loses. The report errs on the safe side.
+			name:        "a conditional gitcd include that holds follows one that misses and the key sits between them",
+			global:      "{includeIfElsewhere}[user]\n\temail = " + globalEmail + "\n{includeIf}",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": profileEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
+		{
+			name:        "a bare gitcd include follows a conditional one and the key sits between them",
+			global:      "{includeIfElsewhere}[user]\n\temail = " + globalEmail + "\n{include}",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": profileEmail},
+			wantAfter:   map[string]bool{"user.email": false},
+		},
+		{
+			name:        "an includeIf section written in lower case",
+			global:      "{includeIfLower}[user]\n\temail = " + globalEmail + "\n",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
+		{
+			name:        "an includeIf section written in mixed case",
+			global:      "{includeIfMixed}[user]\n\temail = " + globalEmail + "\n",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
+		{
+			name:        "a lower case includeIf holds and the key sits before it",
+			global:      "[user]\n\temail = " + globalEmail + "\n{includeIfLower}",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": profileEmail},
+			wantAfter:   map[string]bool{"user.email": false},
+		},
+		{
+			name:        "the gitcd include is a tilde path with a dot dot and a foreign include follows the key",
+			global:      "{includeDotDot}[user]\n\temail = " + globalEmail + "\n[include]\n\tpath = {foreign}\n",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
+		{
+			name:        "the gitcd include is spelled through a symlinked directory and a foreign include follows the key",
+			global:      "{includeViaLink}[user]\n\temail = " + globalEmail + "\n[include]\n\tpath = {foreign}\n",
+			includeFile: includeProfile,
+			profileFile: profileBoth,
+			symlinkDir:  true,
+			want:        map[string]string{"user.email": globalEmail},
+			wantAfter:   map[string]bool{"user.email": true},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -162,6 +313,8 @@ func TestCheckGlobal_MessageMatchesWhatGitResolves(t *testing.T) {
 			// through testenv.GitValue with its own environment.
 			setupGitEnv(t)
 			home := t.TempDir()
+			// A "~/" include path expands against this directory.
+			testenv.SetHome(t, home)
 			repo := filepath.Join(home, "repo")
 			if err := os.MkdirAll(repo, 0o755); err != nil {
 				t.Fatalf("create %s: %v", repo, err)
@@ -175,10 +328,28 @@ func TestCheckGlobal_MessageMatchesWhatGitResolves(t *testing.T) {
 			globalPath := filepath.Join(home, "gitconfig-global")
 			expand := strings.NewReplacer(
 				"{include}", "[include]\n\tpath = "+filepath.ToSlash(includePath)+"\n",
+				"{includeTilde}", "[include]\n\tpath = ~/includes.gitconfig\n",
+				// A "**/" pattern avoids the symlinked temporary directory
+				// of some systems, which git does not resolve in a pattern.
+				"{includeIfElsewhere}", "[includeIf \"gitdir:**/elsewhere/\"]\n\tpath = "+filepath.ToSlash(includePath)+"\n",
+				"{includeIf}", "[includeIf \"gitdir:**/repo/\"]\n\tpath = "+filepath.ToSlash(includePath)+"\n",
+				"{includeIfBranch}", "[includeIf \"onbranch:release\"]\n\tpath = "+filepath.ToSlash(includePath)+"\n",
+				"{includeIfLower}", "[includeif \"gitdir:**/repo/\"]\n\tpath = "+filepath.ToSlash(includePath)+"\n",
+				"{includeIfMixed}", "[IncludeIF \"gitdir:**/repo/\"]\n\tpath = "+filepath.ToSlash(includePath)+"\n",
+				"{includeDotDot}", "[include]\n\tpath = ~/repo/../includes.gitconfig\n",
+				"{includeViaLink}", "[include]\n\tpath = "+filepath.ToSlash(filepath.Join(home, "linkdir", "includes.gitconfig"))+"\n",
 				"{foreign}", filepath.ToSlash(foreignPath),
 				"{profile}", filepath.ToSlash(profilePath),
 				"{default}", filepath.ToSlash(defaultPath),
 			)
+			if tt.symlinkDir {
+				if runtime.GOOS == "windows" {
+					t.Skip("creating a symlink needs a privilege on Windows")
+				}
+				if err := os.Symlink(home, filepath.Join(home, "linkdir")); err != nil {
+					t.Fatalf("symlink the home directory: %v", err)
+				}
+			}
 			files := map[string]string{
 				profilePath: tt.profileFile,
 				includePath: expand.Replace(tt.includeFile),

@@ -311,7 +311,10 @@ func alreadyIncluded(content []byte, includePath string) bool {
 	// only appears there in its escaped form.
 	escaped := strings.ReplaceAll(includePath, `\`, `\\`)
 	return len(content) > 0 &&
-		(strings.Contains(string(content), includePath) || strings.Contains(string(content), escaped))
+		(strings.Contains(string(content), includePath) || strings.Contains(string(content), escaped) ||
+			// A hand written "~/" path or a path under an "[includeIf]"
+			// names the same file without the absolute text.
+			git.NamesGitcdInclude(content, includePath))
 }
 
 // reportGlobalIdentityKeys prints every key found, its value, and the
