@@ -408,7 +408,7 @@ func TestCheckManagedFiles(t *testing.T) {
 func TestCheckGlobal(t *testing.T) {
 	t.Run("a global identity key is reported, naming the target profile", func(t *testing.T) {
 		content := []byte("[user]\n\temail = [email protected]\n")
-		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", true)
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "", "global", true)
 		if err != nil {
 			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
 		}
@@ -423,7 +423,7 @@ func TestCheckGlobal(t *testing.T) {
 
 	t.Run("a target profile that does not exist yet is named as a suggestion, not as fact", func(t *testing.T) {
 		content := []byte("[user]\n\temail = [email protected]\n")
-		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", false)
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "", "global", false)
 		if err != nil {
 			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
 		}
@@ -438,7 +438,7 @@ func TestCheckGlobal(t *testing.T) {
 
 	t.Run("instead attaches to belongs, not to the trailing subclause", func(t *testing.T) {
 		content := []byte("[user]\n\temail = [email protected]\n")
-		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", false)
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "", "global", false)
 		if err != nil {
 			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
 		}
@@ -456,7 +456,7 @@ func TestCheckGlobal(t *testing.T) {
 
 	t.Run("a global identity key after the include is reported as an ordering finding too", func(t *testing.T) {
 		content := []byte("[include]\n\tpath = /some/include.gitconfig\n[user]\n\temail = [email protected]\n")
-		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", true)
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "", "global", true)
 		if err != nil {
 			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
 		}
@@ -469,7 +469,7 @@ func TestCheckGlobal(t *testing.T) {
 		content := []byte(
 			"[include]\n\tpath = /some/include.gitconfig\n[user]\n\tname = Someone\n\temail = [email protected]\n",
 		)
-		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", true)
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "", "global", true)
 		if err != nil {
 			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
 		}
@@ -484,7 +484,7 @@ func TestCheckGlobal(t *testing.T) {
 
 	t.Run("no findings for a global configuration with no identity key at all", func(t *testing.T) {
 		content := []byte("[core]\n\teditor = vim\n")
-		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "global", true)
+		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "", "global", true)
 		if err != nil {
 			t.Fatalf("CheckGlobal() returned an unexpected error: %v", err)
 		}

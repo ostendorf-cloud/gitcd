@@ -66,8 +66,10 @@ const (
 	KindManagedFileStale Kind = "managed-file-stale"
 	// KindGlobalIdentityKey is an identity key the global git
 	// configuration sets directly: "user.useConfigOnly" cannot suppress
-	// it, so it applies to every repository gitcd manages, one some rule
-	// matches or not.
+	// it. Git takes the last value. A key sitting after an include section
+	// wins over every profile. Any other key loses to a profile that sets
+	// it, once the gitcd include sits after the key, and applies to a
+	// repository no profile reaches or where no profile sets it.
 	KindGlobalIdentityKey Kind = "global-identity-key"
 	// KindGlobalIdentityOrder is a global identity key sitting after the
 	// gitcd include: "git config --global --add" inserts a new key into
@@ -481,7 +483,10 @@ func managedFileNote(path, includePath string) string {
 // text, sets directly, naming movedProfileTarget as the profile it would
 // belong in, and KindGlobalIdentityOrder when one or more of them sit
 // after the gitcd include, which would keep winning over every includeIf
-// value silently.
+// value silently. includePath is the include file "gitcd apply" renders:
+// a key after the include section naming it counts as after the gitcd
+// include, even when a foreign include follows. An empty includePath
+// leaves only the last include section as the line.
 //
 // movedProfileTargetExists tells the finding whether movedProfileTarget
 // already names a profile the configuration actually carries: a caller
@@ -491,26 +496,38 @@ func managedFileNote(path, includePath string) string {
 // "gitcd init --move-identity" accepts a "--profile" naming any profile
 // at all, and nothing here can recover which one was chosen in the past
 // for a key moved before this run.
-func CheckGlobal(content []byte, globalPath, movedProfileTarget string, movedProfileTargetExists bool) ([]Finding, error) {
+func CheckGlobal(content []byte, globalPath, includePath, movedProfileTarget string, movedProfileTargetExists bool) ([]Finding, error) {
 	var findings []Finding
 
 	belongsIn := fmt.Sprintf("profile %q", movedProfileTarget)
 	if !movedProfileTargetExists {
 		belongsIn = fmt.Sprintf("a profile such as %q, which the configuration does not yet define", movedProfileTarget)
 	}
+	keys, err := git.IdentityKeysAfterGitcdInclude(content, git.IdentityKeys, includePath)
+	if err != nil {
+		return nil, fmt.Errorf("doctor: check %s for an identity key after the include: %w", globalPath, err)
+	}
+	isAfter := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		isAfter[k] = true
+	}
 	for _, v := range git.FindGlobalIdentityValues(content, git.IdentityKeys) {
+		// Git takes the last value, so the key's position decides which
+		// sentence is true: after an include section it wins over every
+		// profile, anywhere else a profile that sets it wins once the
+		// gitcd include sits after it.
+		effect := "A profile that sets this key overrides it when the gitcd include comes after it, " +
+			"but it still applies to a repository no profile reaches or where no profile sets this key"
+		if isAfter[v.Key] {
+			effect = "It sits after an include section, so it wins over every profile"
+		}
 		findings = append(findings, Finding{
 			Kind: KindGlobalIdentityKey,
 			Message: fmt.Sprintf(
-				"%s sets %s = %s directly; \"user.useConfigOnly\" cannot suppress it, so every repository gitcd manages, including one no rule matches, gets this identity; it belongs instead in %s",
-				globalPath, v.Key, v.Value, belongsIn,
+				"%s sets %s = %s directly. %s, and \"user.useConfigOnly\" cannot suppress it. It belongs instead in %s",
+				globalPath, v.Key, v.Value, effect, belongsIn,
 			),
 		})
-	}
-
-	keys, err := git.IdentityKeysAfterInclude(content, git.IdentityKeys)
-	if err != nil {
-		return nil, fmt.Errorf("doctor: check %s for an identity key after the include: %w", globalPath, err)
 	}
 	if len(keys) > 0 {
 		findings = append(findings, Finding{

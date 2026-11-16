@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -275,8 +276,9 @@ var configKeyLine = regexp.MustCompile(`^\s*([A-Za-z][A-Za-z0-9-]*)\s*(?:(=)\s*(
 // sets. It says nothing about FindGlobalIdentityValues' concern, which is
 // broader and applies regardless of position: any of these keys set
 // directly anywhere in this file is already "configuration" by git's own
-// definition, so it is used for every repository, matched by some rule or
-// not, with or without ever reaching this function's notion of "after".
+// definition. A profile that sets the same key wins while the include sits
+// after it, but the global value still applies to a repository no profile
+// reaches and to keys a profile leaves unset.
 func IdentityKeyAfterInclude(content []byte, keys []string) (key string, found bool, err error) {
 	lines := strings.Split(string(content), "\n")
 
@@ -323,6 +325,32 @@ func IdentityKeyAfterInclude(content []byte, keys []string) (key string, found b
 	return "", false, nil
 }
 
+// configValueText returns the text of a raw git config value as it is
+// compared against a path: surrounding quotes removed, a comment that
+// starts with ";" or "#" outside quotes cut off, whitespace trimmed.
+// Backslash escapes are left as written, so a caller compares the doubled
+// form git writes as well as the native one.
+func configValueText(raw string) string {
+	var b strings.Builder
+	inQuote := false
+scan:
+	for i := 0; i < len(raw); i++ {
+		switch c := raw[i]; {
+		case c == '\\' && i+1 < len(raw):
+			b.WriteByte(c)
+			i++
+			b.WriteByte(raw[i])
+		case c == '"':
+			inQuote = !inQuote
+		case (c == ';' || c == '#') && !inQuote:
+			break scan
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // IdentityKeysAfterInclude is IdentityKeyAfterInclude, reporting every
 // key in keys that sits after the last bare "[include]" section, in file
 // order, rather than only the first it finds: "git config --global --add"
@@ -330,18 +358,57 @@ func IdentityKeyAfterInclude(content []byte, keys []string) (key string, found b
 // "global-identity-order" finding naming only one of several keys already
 // at risk would understate the problem for no reason.
 func IdentityKeysAfterInclude(content []byte, keys []string) ([]string, error) {
+	return IdentityKeysAfterGitcdInclude(content, keys, "")
+}
+
+// IdentityKeysAfterGitcdInclude is IdentityKeysAfterInclude for a caller
+// that knows the path of the include file "gitcd apply" renders. Git takes
+// the last value, so a key loses to a profile only while the gitcd include
+// sits after it. When a bare "[include]" section has a "path" whose value
+// equals includePath, written natively, with doubled backslashes or with
+// forward slashes, quoted or followed by a comment or not, the
+// last such section is the line a key must precede: a key after it wins
+// over every profile even when a foreign include follows. Without one,
+// the last bare "[include]" section is the line, as in
+// IdentityKeysAfterInclude. An empty includePath names no section.
+func IdentityKeysAfterGitcdInclude(content []byte, keys []string, includePath string) ([]string, error) {
 	lines := strings.Split(string(content), "\n")
 
+	// A Windows path appears natively, with every backslash doubled as git
+	// writes it, or with forward slashes, which git accepts as well.
+	forms := []string{
+		includePath,
+		strings.ReplaceAll(includePath, `\`, `\\`),
+		strings.ReplaceAll(includePath, `\`, "/"),
+	}
+
 	lastIncludeEnd := -1
+	lastGitcdEnd := -1
 	inBareInclude := false
+	holdsGitcd := false
 	for i, line := range lines {
 		if m := configSectionHeader.FindStringSubmatch(line); m != nil {
 			inBareInclude = strings.EqualFold(m[1], "include") && m[2] == ""
+			holdsGitcd = false
 			continue
 		}
-		if inBareInclude {
-			lastIncludeEnd = i
+		if !inBareInclude {
+			continue
 		}
+		lastIncludeEnd = i
+		if includePath == "" {
+			continue
+		}
+		if m := configKeyLine.FindStringSubmatch(line); m != nil && strings.EqualFold(m[1], "path") &&
+			slices.Contains(forms, configValueText(m[3])) {
+			holdsGitcd = true
+		}
+		if holdsGitcd {
+			lastGitcdEnd = i
+		}
+	}
+	if lastGitcdEnd != -1 {
+		lastIncludeEnd = lastGitcdEnd
 	}
 	if lastIncludeEnd == -1 {
 		return nil, nil
@@ -390,8 +457,8 @@ type GlobalIdentityValue struct {
 // directly, in content's own file order, regardless of position relative
 // to any "[include]" or "[includeIf]" section: a key set this way is
 // already "configuration" by git's own definition, so
-// "user.useConfigOnly" never suppresses it, and it applies to every
-// repository gitcd manages, one some rule matches or not, exactly the gap
+// "user.useConfigOnly" never suppresses it. It applies to a repository no
+// profile reaches and to keys a profile leaves unset, the gap
 // IdentityKeyAfterInclude's narrower, ordering only check does not cover.
 // The returned slice is ordered the same as keys, one entry per key that
 // is set, carrying the last value assigned to it when content sets it

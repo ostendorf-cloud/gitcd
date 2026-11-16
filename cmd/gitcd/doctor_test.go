@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
 )
 
 func TestRunDoctor_NoArgumentsAccepted(t *testing.T) {
@@ -103,6 +105,61 @@ func TestRunDoctor_NoRepositoriesAndNoManagedFilesNeededIsStillNonZeroOnAGlobalI
 	}
 	if !strings.Contains(stdout.String(), "global-identity-key") {
 		t.Fatalf("doctor stdout = %q, want a global-identity-key finding", stdout.String())
+	}
+}
+
+// TestRunDoctor_GlobalKeyPositionRelativeToTheGitcdInclude runs the whole
+// command against a global file whose key sits on one side of the gitcd
+// include while a foreign include follows it: the command must pass the
+// include file's path on, or it only sees the foreign include as the line
+// a key has to precede.
+func TestRunDoctor_GlobalKeyPositionRelativeToTheGitcdInclude(t *testing.T) {
+	tests := []struct {
+		name       string
+		global     string
+		wantOrder  bool
+		wantPhrase string
+		notPhrase  string
+	}{
+		{
+			name:       "a key between the gitcd include and a foreign include",
+			global:     "{include}[user]\n\temail = jane@global.example.test\n[include]\n\tpath = {foreign}\n",
+			wantOrder:  true,
+			wantPhrase: "It sits after an include section, so it wins over every profile",
+			notPhrase:  "overrides it when the gitcd include comes after it",
+		},
+		{
+			name:       "a key before the gitcd include and a foreign include after it",
+			global:     "[user]\n\temail = jane@global.example.test\n{include}[include]\n\tpath = {foreign}\n",
+			wantOrder:  false,
+			wantPhrase: "overrides it when the gitcd include comes after it",
+			notPhrase:  "It sits after an include section",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := setupEnv(t)
+			expand := strings.NewReplacer(
+				"{include}", "[include]\n\tpath = "+gitConfigEscaped(gitconfig.IncludePath(home))+"\n",
+				"{foreign}", filepath.ToSlash(filepath.Join(home, "other.gitconfig")),
+			)
+			writeFile(t, globalConfigPath(home), expand.Replace(tt.global))
+
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"doctor"}, &stdout, &stderr); code != 1 {
+				t.Fatalf("doctor = %d, want 1, stdout: %s stderr: %s", code, stdout.String(), stderr.String())
+			}
+			out := stdout.String()
+			if got := strings.Contains(out, "global-identity-order"); got != tt.wantOrder {
+				t.Errorf("doctor stdout = %q, want a global-identity-order finding = %v", out, tt.wantOrder)
+			}
+			if !strings.Contains(out, tt.wantPhrase) {
+				t.Errorf("doctor stdout = %q, want it to contain %q", out, tt.wantPhrase)
+			}
+			if strings.Contains(out, tt.notPhrase) {
+				t.Errorf("doctor stdout = %q, want it not to contain %q", out, tt.notPhrase)
+			}
+		})
 	}
 }
 
