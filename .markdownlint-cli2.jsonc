@@ -1,5 +1,5 @@
 {
-  "ignores": ["**/node_modules/**", "CLAUDE.md", ".claude/worktrees/**"],
+  "ignores": ["**/node_modules/**", "**/CHANGELOG.md", "CLAUDE.md", ".claude/worktrees/**"],
   "config": {
     "MD013": {
       "line_length": 100,
