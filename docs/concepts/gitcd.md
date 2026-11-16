@@ -59,8 +59,10 @@
   but needed on its own wherever a profile file is read outside that include chain. Neither
   copy protects against a `user.name`, `user.email`, `user.signingkey`, `gpg.format` or
   `commit.gpgsign` set directly in the user's own global git configuration, outside gitcd's
-  generated files: that value is already "configuration" by git's own definition, and applies
-  to every repository, one some rule matches or not. `init` detects exactly this case, reports
+  generated files: that value is already "configuration" by git's own definition. It applies
+  to a repository no profile reaches and to keys a profile leaves unset. A profile that sets
+  the key wins only while the global key sits before gitcd's include, and a key placed after
+  the include wins in every repository. `init` detects exactly this case, reports
   every such key, and, only when asked, moves it into a profile and removes it from the global
   file, with a backup.
 - `internal/scan` walks the configured root into repository values for `list`, `doctor` and

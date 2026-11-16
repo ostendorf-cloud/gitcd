@@ -177,7 +177,7 @@ First version:
    describe the steps and the failures. Fix a failure in the manifest by changing
    `.goreleaser.yaml` and the next release, never by editing the checksums by hand.
 7. After the merge, check on a Windows machine that `winget install OstendorfCloud.gitcd` works
-   and that `gitcd version` runs. Only then is the issue done.
+   and that `gitcd version` runs.
 
 Later versions, until the submission is automated by a separate decision:
 
