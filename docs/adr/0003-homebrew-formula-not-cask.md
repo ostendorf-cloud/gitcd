@@ -44,8 +44,11 @@ gitcd publishes a Homebrew formula (`brews`) to `ostendorf-cloud/homebrew-tap`, 
   and `task lint:goreleaser` fails visibly.
 - The formula depends on `git` (`depends_on "git"`), since the commands that touch repositories
   shell out to it. The formula's own `test do` block only runs `gitcd version` and does not need git.
-- Revisit when issue 44 lands: a signed and notarised binary removes the main reason against a
+- Revisit when the binary is signed and notarised: that removes the main reason against a
   cask. Moving is a new ADR, a `homebrew_casks` entry and deleting `Formula/gitcd.rb` from the tap.
+- Issue 44 signs the checksums file with cosign, not the binary (ADR 0004). Whether that changes
+  this decision is not verified: the Cask Cookbook and Acceptable Casks pages name Gatekeeper
+  checks but say nothing about cosign, and no fetched page ties them to Apple code signing.
 - Users who run `brew install --cask` get nothing. The formula is the only install path.
 
 ## Alternatives
