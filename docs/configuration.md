@@ -188,6 +188,205 @@ condition depend on its own consequence.
 A profile name is a file name: it becomes `~/.config/gitcd/profiles/<name>.gitconfig`, and it is
 also what a person types at `gitcd profile set <name>` or in a rule's `profile` field.
 
+### What a profile name may be
+
+A profile name becomes the name of the file `apply` renders that profile to, under
+`~/.config/gitcd/profiles/`, and is written into the include file as part of a path. So it has
+to be one file name, on every platform: letters, digits, `.`, `-` and `_`, beginning and ending
+with a letter or a digit. A name that is empty, holds a path separator, names the current or a
+parent directory, or is a name Windows reserves for a device is rejected.
+
+The class differs from the one a profile key's section uses, in both directions. It allows `_`
+and `.`, because a name is also what you type at `--profile work_eu`. It requires a letter or
+digit at each end, because a leading `.` would hide the rendered file and a trailing `.` or
+space is silently stripped by Windows, which would render two distinct profiles to one file.
+
+Two profile names that differ only in case are rejected together. A name becomes a file name,
+and on a case insensitive filesystem `work` and `Work` are one file, so one profile's identity
+would quietly replace the other's.
+
+A rejected name fails the whole file at load time, before any rule is looked at, so a rule
+naming that profile never resolves and no command runs against a partly valid configuration.
+
+### What a profile key may be
+
+A profile key is a git config key in `section.key` or `section.subsection.key` form. The
+section is a letter followed by letters, digits and `-`. The subsection and the key name hold
+only letters, digits and `-`. The subsection is held to the same narrow class as the key name
+because it is written into the `[section "subsection"]` header of the generated file, where a
+wider character would put the keys after it under a section the profile does not name.
+
+A value may hold anything but a control character git config has no escape for: a line break,
+a tab and a backspace are written escaped and read back unchanged, a carriage return is
+rejected.
+
+## `allowUnsafeKeys`
+
+A profile is applied automatically, per remote, to a repository whose contents came from that
+remote. So gitcd refuses a profile key that hands git a command to run, changes what git
+trusts, or is not a key it knows. A refused key fails the whole file at load time, in every
+command, before anything is written. The list opts single keys back in, default empty.
+
+```yaml
+allowUnsafeKeys:
+  - core.pager
+
+profiles:
+  private:
+    user.email: jane@example.com
+    core.pager: less -FRX
+```
+
+- An entry is one git config key, written like a profile key.
+- An entry carries a key and never a value. The value stays in the profile.
+- An entry matches the section and the key name case insensitively and the subsection exactly:
+  `CORE.PAGER` opts in `core.pager`, and `url.X.insteadOf` does not opt in `url.x.insteadOf`.
+- A wildcard is not accepted.
+- An entry naming a key nothing restricts is an error, not a no-op:
+  `allowUnsafeKeys names "user.email", which a profile may carry without being opted in`.
+- `gitcd doctor` reports every key applied this way as an `opted-in-key` finding, so the choice
+  stays visible. The finding keeps `doctor` at exit code `1` for as long as the entry exists.
+
+### Finding out whether a key is restricted
+
+There is no list to consult. Put the key into a profile and run any command, `gitcd apply
+--dry-run` for one. A restricted key is refused with a message that names the key, the reason and
+the remedy:
+
+```text
+gitcd apply: config: parse /home/me/.gitcd.yaml: profile "work": config: profile key needs an explicit opt in: "core.sshCommand" names a command git runs, or a path git resolves one from; list it under "allowUnsafeKeys" to apply it anyway
+```
+
+The reason is one of these. Each wording was produced by the binary:
+
+| The refusal says the key | Which keys |
+| --- | --- |
+| `names a command git runs, or a path git resolves one from` | A key name that ends in a word like `command`, `cmd`, `pager`, `path`, `program` or `askPass`, such as `core.sshCommand`, `core.pager` and `core.hooksPath`. |
+| `names a program git runs for this filter` or `for this submodule` | `filter.<driver>.clean`, `smudge`, `process` and `submodule.update`. |
+| `sets a command git runs, or rewrites the URL git contacts` | Every key under `alias`, `pager` and `url`. |
+| `makes git read configuration from a file no gate has seen` | Every key under `include` and `includeIf`. |
+| `decides what git verifies, trusts, contacts or writes, rather than naming a command` | Keys such as `http.sslVerify`, `core.protectNTFS` and `safe.directory`. |
+| `decides whether one of git's object checks still applies` | The message severities `fsck.<msg-id>`, `fetch.fsck.<msg-id>` and `receive.fsck.<msg-id>`, and `fsck.skipList`. |
+| `decides what git trusts, writes or resolves something from` | Keys such as `core.fsmonitor` and `credential.helper`. |
+| `is not a setting the git this gitcd was built against documents` | A key git does not document in the version gitcd was built against. |
+
+The families behind these rows are described under
+[what the gate restricts](#what-the-gate-restricts).
+
+### What the gate restricts
+
+Some git config keys hand git a command to run, take over a credential prompt, change which URL
+git contacts, or decide what git trusts. They are rejected unless `allowUnsafeKeys` names the
+key. A key is restricted for either of two reasons.
+
+The first is what the key does. These are families, not a list, and the subsection never
+decides a match, so `diff.command` and `diff.<driver>.command` are the same setting to the gate:
+
+- a key name ending in `askPass`, `cmd`, `command`, `driver`, `editor`, `external`, `hook`,
+  `httpd`, `pager`, `path`, `process`, `program`, `proxy`, `smtpServer`, `target`,
+  `templateDir`, `textconv`, `tunnel` or `variant`, under any section. Three `*path` keys name
+  no path git resolves and are excepted: `core.quotePath`, `credential.useHttpPath` and
+  `advice.updateSparsePath`
+- the key names `browser`, `fsmonitor`, `helper`, `insteadOf`, `pushInsteadOf` and `viewer`,
+  under any section
+- `clean`, `smudge` and `process` under `filter`, and `update` under `submodule`, a form of
+  which git documents as a custom command and refuses to copy out of `.gitmodules` itself
+- every key under `alias`, `include`, `includeIf`, `pager` and `url`
+
+`include` and `includeIf` are whole sections because their value makes git read configuration
+from somewhere else, so one of them would hand every key in that file to git with no gate at
+all. They are the only two keys in git that do that.
+
+A second class is restricted for a different reason: a key whose value decides whether git
+verifies something, where it gets the material to verify with, where it sends its requests, or
+what it writes to the filesystem. None of them runs a program. The reason is the same as for the
+`core` protections: a profile is applied automatically, per remote, to a repository whose
+contents came from that remote, so the mechanism that decides who the commit is from should not
+also decide what git trusts. It covers `core.protectHFS`, `core.protectNTFS`,
+`core.sharedRepository`, `core.symlinks`, `safe.directory`, `safe.bareRepository`,
+`protocol.allow`, `credential.protectProtocol`, `credential.sanitizePrompt`,
+`transfer.credentialsInUrl`, `transfer.fsckObjects`, `fetch.fsckObjects`,
+`receive.fsckObjects`, `gpg.ssh.revocationFile`, `gpg.minTrustLevel`,
+`gpg.ssh.allowedSignersFile` and 21 `http.*` keys. They cover TLS verification, the trust store
+and backend, client certificates, cookies, extra headers, redirects, hostname resolution,
+`http.proxy` with its TLS keys, the auth keys `http.delegation`, `http.emptyAuth` and
+`http.proactiveAuth`, and `http.pinnedPubkey`.
+
+`gpg.ssh.allowedSignersFile` is in that class because it is the trust store an ssh signature is
+checked against, which is the other half of the same decision as `gpg.ssh.revocationFile`.
+
+The fsck message severities are restricted too, in all three spellings git documents:
+`fsck.<msg-id>`, `fetch.fsck.<msg-id>` and `receive.fsck.<msg-id>`, with `fsck.skipList` beside
+them. A severity of `ignore` or a skip list turns off the same object checks the `fsckObjects`
+switches turn on, so restricting the switch and allowing the per message setting would cover
+one spelling of the decision and not the other. The message ids come from the generated key
+list, so a newer git's ids are covered by regenerating it. The cost is a refusal in the safe
+direction: the rule reads the key and not the value, so a profile raising a severity rather
+than lowering it needs the same opt in.
+
+A third class is deliberately **not** restricted: a key naming a file git reads as data.
+`core.attributesFile`, `core.excludesFile`, `mailmap.file`, `diff.orderFile`,
+`blame.ignoreRevsFile` and `format.signatureFile` all name a file whose contents git
+interprets, and none grants trust or decides a verification. An attributes file can name a
+filter or a diff driver, but only by a name some config key has to define, and gitcd will not
+write such a definition without an opt in. `mailmap.file` and `blame.ignoreRevsFile` change
+what git shows about authorship, not what it verifies, and `format.signatureFile` is the text
+appended to a patch mail rather than anything cryptographic.
+
+A match is set aside only in `advice`, `color` and `column`, the sections where git resolves no
+key's value to a program or a path, so a match there is a collision of spelling:
+`advice.ignoredHook` and `color.pager` read like commands and are plain switches.
+
+The value is never what sets a match aside. `true`, `false` and `yes` are programs on `PATH`,
+so `core.sshCommand = false` runs `/usr/bin/false` and `core.sshCommand = yes` never returns. A
+key whose value git resolves to a program is restricted whatever it carries, an empty value
+included.
+
+The four protection names are a scope decision, not a command: a profile may not weaken
+`core.protectNTFS`, `core.protectHFS`, `core.sharedRepository` or `core.symlinks`. A profile is
+applied automatically, per remote, to a repository whose contents came from that remote, and
+what git will write to the filesystem should not be decided by the same mechanism that decides
+who the commit is from. Naming one in `allowUnsafeKeys` still sets it.
+
+The second reason is that the key is not one the git this gitcd was built against documents at
+all. `internal/config/gitkeys.go` holds that list, generated from `git help -c` by
+`task generate:gitkeys`. This is what keeps the families from having to be exhaustive: a
+setting git adds later is restricted whatever it is called, so the families can describe what
+they really cover instead of being widened until they catch everything. The cost is that a key
+from a newer git, and a key in a section whose names git does not enumerate such as
+`filter.<driver>.required`, is refused until the list is regenerated or the key is named in
+`allowUnsafeKeys`. A short addendum in `internal/config/validate.go` carries the
+keys git documents in `git-config(1)` but does not print, `core.longPaths` today. Each entry
+names where git documents it, and a test fails if the generated list starts carrying it.
+
+The identity and signing keys a profile exists to carry are not restricted: `user.name`,
+`user.email`, `user.signingKey`, `gpg.format`, `commit.gpgsign` and `tag.gpgsign`. `gpg.format`
+is read against a fixed set of formats and names no command. The program for each format is
+`gpg.<format>.program`, which is restricted. A profile that also wants to name the allowed
+signers file lists `gpg.ssh.allowedSignersFile` under `allowUnsafeKeys`, since that file decides
+which signatures verify rather than which identity signs.
+
+## What a root, a host alias and a layout may be
+
+`root` is rendered into the generated directory conditions, so it has to name a directory and
+nothing more: an absolute path, holding no glob metacharacter, no quote, no control character
+and no `.` or `..` segment. A space and a non-ASCII name are fine, because a home directory may
+hold either. A glob here would match repositories outside the root, and a quote would make git
+refuse the file your global configuration includes.
+
+A host's `aliases` are written into the generated conditions in the same position the rule's own
+host occupies, so each is held to much the same terms as a rule host: no glob, no quote, no path
+separator. An alias of `*` would otherwise apply an owner scoped rule on every host. An alias
+holds letters, digits, `.`, `-` and `_`, and begins and ends with a letter or a digit. The
+underscore is accepted, since an alias is an `ssh_config` `Host` name rather than a DNS name. A
+rule host does not accept it.
+
+A layout template is a path, so unlike a rule field it carries `/` between its segments and
+`{host}` style placeholders inside them. Each segment may hold placeholders from the set
+`{host}`, `{owner}`, `{org}`, `{project}` and `{repo}`, plus letters, digits, `.`, `-` and `_`.
+A glob, a quote and a `.` or `..` segment are rejected: a glob widens the generated condition
+past the rule that named it, and an upward segment roots it outside the configured root.
+
 ## `rules`
 
 Decides which `profiles` entry a remote resolves to. Each rule names a `host`, required, and may
@@ -199,7 +398,7 @@ rules:
   - host: dev.azure.com
     profile: work
   - host: github.com
-    owner: ostendorf-cloud
+    owner: acme
     profile: private
   - host: github.com
     owner: acme
@@ -219,6 +418,21 @@ the match furthest, every time.
 The same ranking decides the order gitcd renders the generated `includeIf` blocks in, from least
 to most specific, because a later block in that generated file wins over an earlier one, by
 git's own behaviour. Rule order in the YAML file never affects this rendering order either.
+
+### What a rule field may be
+
+A rule's `host`, `owner` and `repo` are written literally into the conditions of the generated
+include file. The character class differs per field:
+
+- `host` holds letters, digits, `.` and `-`, and begins and ends with a letter or a digit. An
+  underscore is refused, unlike in a host alias.
+- `owner` holds letters, digits, `.`, `-` and `_`, with `/` between segments so a group and
+  subgroup can be named as one. No segment is empty, `.` or `..`.
+- `repo` holds letters, digits, `.`, `-` and `_`, and is not `.` or `..`.
+
+A glob is not accepted in any of them: leaving a field out already matches every value of that
+field, while a `*` in an `owner` would silently apply the rule's identity and signing key to
+repositories it does not name.
 
 ## `defaultProfile`
 
@@ -288,11 +502,18 @@ covers still refuses to guess, and again inside every profile file, redundant fo
 the include chain already reaches, but load bearing wherever a profile file is read on its own,
 outside that chain.
 
-Neither copy, nor a pinned local override, protects against `user.name`, `user.email`,
-`user.signingkey`, `gpg.format` or `commit.gpgsign` set directly in the user's own global git
-configuration, outside every file gitcd generates: by git's own definition, that is already
-"configuration", so `useConfigOnly` has nothing left to suppress, and the value applies to every
-repository gitcd manages, one some rule matches or not.
+Neither copy protects against `user.name`, `user.email`, `user.signingkey`, `gpg.format` or
+`commit.gpgsign` set directly in the user's own global git configuration, outside every file
+gitcd generates: by git's own definition, that is already "configuration", so `useConfigOnly`
+has nothing left to suppress. What such a value does depends on where it sits, because git lets
+the last value win:
+
+- Before the `include.path` line, as it is when `gitcd init` appended the include after the key:
+  the managed include comes later, so a profile that sets the same key wins in every repository
+  the profile reaches, by a rule or by `defaultProfile`. The global value still applies to a
+  repository no profile reaches and to a key the profile leaves unset.
+- After the `include.path` line: the global value wins everywhere, a matching rule or not.
+- A pinned local override beats both, since a repository's own configuration comes last.
 
 `gitcd init` exists to catch exactly that case. Before it adds the include line at all, it scans
 the global git configuration for `user.name`, `user.email`, `user.signingkey`, `gpg.format` and

@@ -207,8 +207,10 @@ it detects every identity key, `user.name`, `user.email`, `user.signingkey`, `gp
 - `--dry-run` prints what would change without writing anything.
 - `--verbose` enables debug logging on stderr.
 
-A move backs up both files it touches, the global git configuration and `~/.gitcd.yaml` (or its
-XDG fallback), before writing either, with the backup path printed on stdout. Both backups
+Adding the include line to a global git configuration that is not empty backs that file up
+first, with or without a move. A move backs up both files it touches, the global git
+configuration and `~/.gitcd.yaml` (or its XDG fallback), before writing either, with the backup
+path printed on stdout. Both backups
 are created `0600`, named after the original plus a UTC timestamp with nanosecond resolution,
 so a second run does not collide with the first. A backup never overwrites anything: when a
 file already sits at the backup path, `init` stops with exit code `1` before it changes either
