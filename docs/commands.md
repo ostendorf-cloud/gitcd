@@ -202,8 +202,9 @@ it detects every identity key, `user.name`, `user.email`, `user.signingkey`, `gp
   stdin, and `no`, the default, only reports it.
 - `--profile <name>` names the profile a moved key is written into, default `global`. `init`
   refuses to use a name that is already `defaultProfile` or an existing profile, since either
-  would silently fold the leaked identity into something it was not meant to join; it names the
-  conflict so the run can be repeated with a different name.
+  would silently fold the leaked identity into something it was not meant to join. It also
+  refuses a name that differs from an existing profile only in case, since the two would
+  render to one file. It names the conflict so the run can be repeated with a different name.
 - `--dry-run` prints what would change without writing anything.
 - `--verbose` enables debug logging on stderr.
 
@@ -245,7 +246,8 @@ run "gitcd apply" to render the profile files this include reads
 Exit codes:
 
 - `0`: the include line was added, already present, or a detected key was only reported.
-- `1`: the chosen `--profile` name conflicts with `defaultProfile` or an existing profile, a
+- `1`: the chosen `--profile` name conflicts with `defaultProfile`, an existing profile, or a
+  profile it differs from only in case, a
   global identity key already sits after an existing `[include]` section, or a file could not
   be read, backed up or written.
 - `2`: `--move-identity` was not `yes`, `ask` or `no`, or an argument was given.
@@ -448,7 +450,9 @@ case of, a missing or stale managed file, and a global git identity key, which
   as `gitcd apply` would, and a path that differs from the layout only in character case,
   renamed in place. Every other finding, identity drift, a stale pin, a structural path
   mismatch and every global identity key, is always reported and never touched: a value
-  `doctor` did not write is never one it overwrites.
+  `doctor` did not write is never one it overwrites. After a repair, the remaining findings are
+  read again from the repaired state, so a finding the repair resolved, an identity drift that
+  only existed because an include file was missing, is not listed as open.
 
   A case-only rename moves one directory per run, the topmost segment that actually differs. A
   repository whose path differs in case at more than one segment therefore needs `--fix` more

@@ -430,6 +430,18 @@ func targetProfileConflict(cfgPath, target string) (string, error) {
 			target, cfgPath,
 		), nil
 	}
+	// Configuration validation refuses two profiles whose names differ only
+	// in case. Refusing here, before any backup is written, keeps that
+	// refusal from coming after both backups exist.
+	for name := range doc.Profiles {
+		if strings.EqualFold(name, target) {
+			return fmt.Sprintf(
+				"profile %q in %s differs from %q only in case, and the two would render to one file\n"+
+					"choose a different, not yet used name with --profile",
+				name, cfgPath, target,
+			), nil
+		}
+	}
 	return "", nil
 }
 

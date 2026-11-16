@@ -107,6 +107,21 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 			progress = stderr
 		}
 		fixed, outstanding = applyFixes(findings, cfg, home, logger, progress, stderr, *dryRun)
+		if !*dryRun && repairAttempted(findings) {
+			// A repair can resolve a finding it never listed as its own: an
+			// identity drift that only existed because the include file was
+			// missing is gone once it is rendered. A repair that fails
+			// partway still changed what is on disk. What is outstanding is
+			// therefore read again from the current state, so no finding
+			// is printed as open that is not, and any that still is still
+			// counts toward the exit status. The first pass already
+			// reported every skipped repository, so this one stays quiet.
+			outstanding, err = collectFindings(ctx, cfg, home, slog.New(slog.DiscardHandler), io.Discard)
+			if err != nil {
+				fmt.Fprintf(stderr, "gitcd doctor: %v\n", err)
+				return 1
+			}
+		}
 	} else {
 		outstanding = findings
 	}
@@ -199,9 +214,9 @@ func collectFindings(ctx context.Context, cfg config.Config, home string, logger
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read %s: %w", globalPath, err)
 	}
-	movedProfileTarget := movedProfileTargetName(cfg)
-	_, movedProfileExists := cfg.Profiles[movedProfileTarget]
-	globalFindings, err := doctor.CheckGlobal(globalContent, globalPath, gitconfig.IncludePath(home), movedProfileTarget, movedProfileExists)
+	globalFindings, err := doctor.CheckGlobal(
+		globalContent, globalPath, gitconfig.IncludePath(home), defaultMovedProfileName, movedProfileUsable(cfg),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -210,20 +225,32 @@ func collectFindings(ctx context.Context, cfg config.Config, home string, logger
 	return findings, nil
 }
 
-// movedProfileTargetName names the profile a global identity key finding
-// points at as where that key belongs: cfg.DefaultProfile, the profile
-// the configuration's own rules already apply to a remote no rule
-// matches, exactly the scope a key set directly in the global git
-// configuration also has, when one is configured; defaultMovedProfileName,
-// "gitcd init --move-identity"'s own default, otherwise. Naming
-// defaultMovedProfileName unconditionally would claim a user who moved
-// their identity with "gitcd init --move-identity --profile work" still
-// has it sitting in a profile called "global".
-func movedProfileTargetName(cfg config.Config) string {
-	if cfg.DefaultProfile != "" {
-		return cfg.DefaultProfile
+// repairAttempted reports whether "--fix" tries to repair any of
+// findings, whether or not the repair succeeds.
+func repairAttempted(findings []doctor.Finding) bool {
+	for _, f := range findings {
+		if repairedByRerender(f) || f.Kind == doctor.KindPathCase {
+			return true
+		}
 	}
-	return defaultMovedProfileName
+	return false
+}
+
+// movedProfileUsable reports whether "gitcd init --move-identity" accepts
+// defaultMovedProfileName as its target for cfg. A move is refused for a
+// name that is the defaultProfile or an existing profile, and configuration
+// validation refuses two profile names that differ only in case, so the
+// comparison ignores case. Validate already requires the defaultProfile to
+// be a profile, so the profile check covers it. Doctor never names the
+// defaultProfile: init refuses it, since moving a leaked identity there
+// would make it every unmatched repository's identity again.
+func movedProfileUsable(cfg config.Config) bool {
+	for name := range cfg.Profiles {
+		if strings.EqualFold(name, defaultMovedProfileName) {
+			return false
+		}
+	}
+	return !strings.EqualFold(cfg.DefaultProfile, defaultMovedProfileName)
 }
 
 // repairedByRerender reports whether one re-render of the managed files

@@ -545,28 +545,38 @@ func managedFileNote(path, includePath string) string {
 
 // CheckGlobal reports every global identity finding: KindGlobalIdentityKey
 // for each identity key content, the global git configuration's own raw
-// text, sets directly, naming movedProfileTarget as the profile it would
-// belong in, and KindGlobalIdentityOrder when one or more of them sit
+// text, sets directly, saying where "gitcd init --move-identity" moves it
+// (movedProfileTarget, or what --profile names), and KindGlobalIdentityOrder when one or more of them sit
 // after the gitcd include, which would keep winning over every includeIf
 // value silently. includePath is the include file "gitcd apply" renders:
 // a key after the include section naming it counts as after the gitcd
 // include, even when a foreign include follows. An empty includePath
 // leaves only the last include section as the line.
 //
-// movedProfileTargetExists tells the finding whether movedProfileTarget
-// already names a profile the configuration actually carries: a caller
-// resolves this against its own configuration, since this package never
-// loads one itself. When false, the message says so rather than naming a
-// profile as if the configuration already carried it, which it need not:
-// "gitcd init --move-identity" accepts a "--profile" naming any profile
-// at all, and nothing here can recover which one was chosen in the past
-// for a key moved before this run.
-func CheckGlobal(content []byte, globalPath, includePath, movedProfileTarget string, movedProfileTargetExists bool) ([]Finding, error) {
+// movedProfileTargetUsable tells the finding whether "gitcd init
+// --move-identity" would accept movedProfileTarget, the profile it moves
+// into by default: it refuses a name the configuration already carries
+// as a profile and a name that is the defaultProfile. A caller resolves
+// this against its own configuration, since this package never loads one
+// itself. When true, the message names movedProfileTarget as the new
+// profile the move creates. When false, it says the default is refused
+// and points at "--profile" instead. Nothing here can recover a
+// "--profile" chosen for a key moved before this run, so the message
+// claims none.
+func CheckGlobal(content []byte, globalPath, includePath, movedProfileTarget string, movedProfileTargetUsable bool) ([]Finding, error) {
 	var findings []Finding
 
-	belongsIn := fmt.Sprintf("profile %q", movedProfileTarget)
-	if !movedProfileTargetExists {
-		belongsIn = fmt.Sprintf("a profile such as %q, which the configuration does not yet define", movedProfileTarget)
+	belongsIn := fmt.Sprintf(
+		"a profile of its own. \"gitcd init --move-identity=yes\" moves it into the new profile %q, "+
+			"or into another unused profile named with --profile",
+		movedProfileTarget,
+	)
+	if !movedProfileTargetUsable {
+		belongsIn = fmt.Sprintf(
+			"a profile of its own. \"gitcd init --move-identity=yes\" refuses %q, which the configuration already uses, "+
+				"so name another unused profile with --profile",
+			movedProfileTarget,
+		)
 	}
 	keys, err := git.IdentityKeysAfterGitcdInclude(content, git.IdentityKeys, includePath)
 	if err != nil {
