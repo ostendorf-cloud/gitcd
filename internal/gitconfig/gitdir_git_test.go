@@ -14,6 +14,7 @@ import (
 
 	"github.com/ostendorf-cloud/gitcd/internal/config"
 	"github.com/ostendorf-cloud/gitcd/internal/gitconfig"
+	"github.com/ostendorf-cloud/gitcd/internal/testenv"
 )
 
 // TestRender_GitdirConditionMatchesARealRepository renders the include
@@ -24,6 +25,7 @@ import (
 // condition is written with forward slashes, a drive letter path included.
 func TestRender_GitdirConditionMatchesARealRepository(t *testing.T) {
 	home := t.TempDir()
+	testenv.SetHome(t, home)
 	// git matches a gitdir condition against the repository's real path,
 	// so the root is resolved through any symlink in the temporary
 	// directory's own path (/tmp on macOS) and, on Windows, any short name.
