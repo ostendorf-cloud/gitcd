@@ -13,9 +13,10 @@ Status: accepted
   which needs a token for that repository. With `skip_upload: true` the page says the package
   is "stored on the dist directory only". The entry is not in GoReleaser's deprecation list
   (<https://goreleaser.com/deprecations/>), read on the day of the change.
-- GoReleaser 2.18.3, which `mise.toml`'s `goreleaser = "2"` resolves to today, rendered three
-  files for a snapshot build, schema version 1.12.0, the latest one the Microsoft manifest page
-  names (<https://learn.microsoft.com/en-us/windows/package-manager/package/manifest>): the
+- GoReleaser 2.20.2, which `mise.toml` pins, rendered three files for a snapshot build, schema
+  version 1.28.0, the one the winget-pkgs pull request template asks for. 2.18.3 wrote 1.12.0,
+  the latest one the Microsoft manifest page named at first
+  (<https://learn.microsoft.com/en-us/windows/package-manager/package/manifest>): the
   version file, the installer file and the `en-US` default locale file. The installer file
   carries `InstallerType: zip`, `NestedInstallerType: portable`, the nested file `gitcd.exe`
   with the command alias `gitcd`, and both Windows archives with the sha256 of the checksums
