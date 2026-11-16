@@ -60,6 +60,18 @@ The release pipeline generates the winget manifest and attaches it. A human subm
   snapshot check proves the shape, not that winget accepts it. `winget validate` needs Windows
   and was not run when this was written.
 - `ReleaseDate` is the day the build ran, GoReleaser's own value.
+- The order of the two installer entries is not fixed. GoReleaser 2.18.3 lists the archives in
+  the order they were added to its artifact list, with no sort, and the archives are built in
+  parallel (read from `internal/pipe/winget/winget.go`, `internal/artifact/artifact.go` and
+  `internal/pipe/archive/archive.go` at v2.18.3). The evidence is the failed `winget` job on
+  `main`, where the x64 archive was built first. Local snapshot runs on one machine gave arm64
+  first in 20 of 20 default runs and in 7 of 8 runs with `--parallelism 2`, one run of those
+  eight gave x64 first. Those figures are the author's own runs and a reviewer could not
+  reproduce the swap locally. The check accepts both orders and still requires each
+  architecture once, each URL and `sha256` exact. The installer schema documentation says
+  nothing about the order of `Installers`, and the client chooses by architecture ("will
+  attempt to determine the best architecture"), so the order is not meant to matter. That was
+  not tried against a real client.
 - The manifest cannot turn on the shell integration. Windows users add one line to their
   PowerShell profile, see `docs/install.md`.
 - `wingetcreate update` is an alternative for later versions. How it handles a zip with a

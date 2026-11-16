@@ -116,8 +116,9 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   verifies the generated files against skeletons stored in `scripts/check-winget-manifest.sh`,
   with the tag and the checksums file of its own run, before it attaches anything.
   `task test:winget` runs that check on a snapshot build, so a change to the entry fails
-  there until the skeletons are updated with it. The `repository` block it holds is required
-  by goreleaser and never contacted.
+  there until the skeletons are updated with it. The check accepts the two installer entries in
+  either order, since goreleaser's order follows the parallel archive builds. The `repository`
+  block it holds is required by goreleaser and never contacted.
 - yamllint's line-length limit is 140, not the default 120. A pinned reusable workflow
   reference needs the full line for its commit digest and version comment. Most of the
   organisation's repositories already run at 140.
