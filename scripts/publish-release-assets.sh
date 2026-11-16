@@ -24,9 +24,20 @@
 # asset. Pushing it to the tap is publish-homebrew-formula.sh's job, in its
 # own release.yaml job after this script published the release.
 #
+# The winget manifest set (version, installer and default locale file) comes
+# out of the same run and is uploaded too. Submitting it to
+# microsoft/winget-pkgs is manual (docs/adr/0005-winget-manifest-semi-automatic.md),
+# no job here touches that repository. The script refuses an incomplete set
+# before it attaches or publishes anything.
+#
 # TAGS is release.yaml's own "tags" action output: one tag per line, empty
 # when release-me released nothing this run.
 set -euo pipefail
+
+# The manifest check below runs from this checkout, not from the tag's
+# worktree, and the build subshell changes directory, so the path is resolved
+# once, absolute.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ -z "${TAGS:-}" ]; then
   echo "nothing released, nothing to attach"
@@ -134,6 +145,33 @@ while IFS= read -r tag; do
       echo "expected exactly one formula in dist/homebrew/Formula for ${tag}" >&2
       exit 1
     fi
+    # The winget manifest set of the same run (the winget entry of
+    # .goreleaser.yaml, skip_upload): one version directory with the three
+    # files winget-pkgs wants. An incomplete set stops the script here, before
+    # anything is attached or published. The glob is unquoted on purpose, an
+    # unmatched one stays literal and fails the -d.
+    winget_dirs=(dist/winget/manifests/o/OstendorfCloud/gitcd/*/)
+    if [ "${#winget_dirs[@]}" -ne 1 ] || [ ! -d "${winget_dirs[0]}" ]; then
+      echo "expected exactly one version directory under dist/winget/manifests/o/OstendorfCloud/gitcd for ${tag}" >&2
+      exit 1
+    fi
+    winget_dir="${winget_dirs[0]%/}"
+    winget_files=(
+      "${winget_dir}/OstendorfCloud.gitcd.yaml"
+      "${winget_dir}/OstendorfCloud.gitcd.installer.yaml"
+      "${winget_dir}/OstendorfCloud.gitcd.locale.en-US.yaml"
+    )
+    for winget_file in "${winget_files[@]}"; do
+      if [ ! -s "${winget_file}" ]; then
+        echo "the winget manifest file ${winget_file} for ${tag} is missing or empty" >&2
+        exit 1
+      fi
+    done
+    winget_entries="$(find "${winget_dir}" -mindepth 1 | wc -l | tr -d ' ')"
+    if [ "${winget_entries}" -ne 3 ]; then
+      echo "the winget manifest directory ${winget_dir} for ${tag} must hold exactly three files, has ${winget_entries} entries" >&2
+      exit 1
+    fi
     # goreleaser signed the checksums file in the same run (the signs entry
     # of .goreleaser.yaml, cosign keyless). A failed signing step already
     # failed the build above. This check covers the case where it ran but
@@ -149,6 +187,18 @@ while IFS= read -r tag; do
     checksums_file="${signature_file%.sigstore.json}"
     if [ ! -s "${checksums_file}" ]; then
       echo "the checksums file ${checksums_file} for ${tag} is missing or empty" >&2
+      exit 1
+    fi
+
+    # The winget manifest against the tag of this run and the checksums file
+    # of this run, not against values read out of the manifest itself: every
+    # line must be part of the generated template, every URL this tag's
+    # release download and every sha256 the checksums file's entry. Before
+    # the signature check and any upload, so a failure leaves the draft as it
+    # was. The files are not signed, this check is what stands in for it.
+    echo "checking the winget manifest for ${tag}"
+    if ! "${script_dir}/check-winget-manifest.sh" "${winget_dir}" "${tag}" "${checksums_file}"; then
+      echo "the winget manifest for ${tag} failed its check. Nothing was attached or published, the draft release stays." >&2
       exit 1
     fi
 
@@ -180,8 +230,12 @@ while IFS= read -r tag; do
     # as an asset: its checksums are those of the archives uploaded here, so
     # publish-homebrew-formula.sh can push it to the tap later, from its own
     # job, without rebuilding anything. The signature bundle of the checksums
-    # file rides along too.
-    gh release upload "${tag}" dist/*.tar.gz dist/*.zip "${checksums_file}" "${signature_file}" dist/homebrew/Formula/*.rb --clobber
+    # file rides along too, and so do the three winget manifest files: their
+    # installer checksums are those of the archives uploaded here, and the
+    # owner submits them to microsoft/winget-pkgs by hand, see docs/install.md.
+    # Nothing here pushes to that repository.
+    gh release upload "${tag}" dist/*.tar.gz dist/*.zip "${checksums_file}" "${signature_file}" dist/homebrew/Formula/*.rb \
+      "${winget_files[@]}" --clobber
 
     echo "publishing ${tag}"
     gh release edit "${tag}" --draft=false

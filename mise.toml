@@ -9,7 +9,10 @@ markdownlint-cli2 = "0.20"
 yamllint = "1"
 gitleaks = "8"
 "aqua:google/addlicense" = "1.2.0"
-goreleaser = "2"
+# Pinned to the patch, not "2": the winget manifest carries the schema version GoReleaser
+# writes, and scripts/check-winget-manifest.sh compares it with a skeleton. A newer
+# GoReleaser changes it, so a bump is a deliberate change with the skeleton updated.
+goreleaser = "2.18.3"
 # Signs the release checksums, see docs/adr/0004-keyless-signing.md. The 3.x line
 # writes the bundle format by default.
 cosign = "3.1"

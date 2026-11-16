@@ -33,8 +33,8 @@ not repeated here.
 - `internal/shell/`: the per shell init snippet `shell-init` prints, including the `cd` tab
   completion registered for zsh and fish.
 - `scripts/`: CI glue specific to this repository's own workflows, such as attaching and
-  publishing release assets after `release.yaml` drafts a release, and pushing the Homebrew
-  formula to the tap once the release is public.
+  publishing release assets after `release.yaml` drafts a release, pushing the Homebrew
+  formula to the tap once the release is public, and checking the generated winget manifest.
 
 Whether a linked worktree counts as one of the repositories a command reports is a single,
 stated rule, not a separate choice per command: `cmd/gitcd/repos.go`'s `scanRepositories` doc
@@ -108,6 +108,14 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   The release verifies the generated formula against a skeleton stored in
   `scripts/check-homebrew-formula.sh`. `task test:formula` runs that check on a snapshot build,
   so a change to the `brews` entry fails there until the skeleton is updated with it.
+- The `winget` entry of `.goreleaser.yaml` only renders the manifest (`skip_upload: true`), and
+  the owner submits it to `microsoft/winget-pkgs` by hand, so no token for that repository
+  exists in the pipeline (`docs/adr/0005-winget-manifest-semi-automatic.md`). The release
+  verifies the generated files against skeletons stored in `scripts/check-winget-manifest.sh`,
+  with the tag and the checksums file of its own run, before it attaches anything.
+  `task test:winget` runs that check on a snapshot build, so a change to the entry fails
+  there until the skeletons are updated with it. The `repository` block it holds is required
+  by goreleaser and never contacted.
 - yamllint's line-length limit is 140, not the default 120. A pinned reusable workflow
   reference needs the full line for its commit digest and version comment. Most of the
   organisation's repositories already run at 140.
@@ -115,9 +123,9 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   stays in this repository instead of the shared scripts repository: a release path must not
   fetch a script from another repository at release time, where a failure burns a version
   number permanently. Keep it in step with release-me's copy; a third consumer moves it to the
-  shared repository. This copy differs on purpose: it also uploads the Homebrew formula
-  goreleaser renders, verifies the cosign bundle of the checksums against the identity of
-  `release.yaml` on `main` before it uploads anything (`docs/adr/0004-keyless-signing.md`), and
-  hands each tag's formula sha256 to the
-  `homebrew` job as the `formula-hashes` step output. release-me's copy does none of these, so
-  a port in either direction must keep or drop those parts deliberately.
+  shared repository. This copy differs on purpose: it also uploads the Homebrew formula and
+  the three winget manifest files goreleaser renders, refuses an incomplete manifest set,
+  verifies the cosign bundle of the checksums against the identity of `release.yaml` on `main`
+  before it uploads anything (`docs/adr/0004-keyless-signing.md`), and hands each tag's formula
+  sha256 to the `homebrew` job as the `formula-hashes` step output. release-me's copy does none
+  of these, so a port in either direction must keep or drop those parts deliberately.

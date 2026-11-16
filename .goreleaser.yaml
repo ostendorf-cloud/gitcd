@@ -68,6 +68,36 @@ brews:
     test: |
       assert_match version.to_s, shell_output("#{bin}/gitcd version")
 
+# The winget manifest, see docs/adr/0005-winget-manifest-semi-automatic.md.
+# skip_upload is always on: goreleaser only renders the files into
+# dist/winget/, with the URLs and checksums of this very build. No token for
+# microsoft/winget-pkgs exists in the pipeline. The owner submits the pull
+# request there by hand, see docs/install.md.
+winget:
+  - name: gitcd
+    package_identifier: OstendorfCloud.gitcd
+    publisher: Ostendorf Cloud
+    publisher_url: https://github.com/ostendorf-cloud
+    publisher_support_url: https://github.com/ostendorf-cloud/gitcd/issues
+    short_description: Clone repositories into a predictable layout and apply a git identity profile per remote
+    homepage: https://github.com/ostendorf-cloud/gitcd
+    license: Apache-2.0
+    license_url: https://github.com/ostendorf-cloud/gitcd/blob/main/LICENSE
+    skip_upload: true
+    tags:
+      - git
+      - cli
+      - developer-tools
+    # The git identity features shell out to git.
+    dependencies:
+      - package_identifier: Git.Git
+    # goreleaser refuses to render without a repository name, even with
+    # skip_upload: "winget.repository.name is required". It names the
+    # submission target and is never contacted, no push and no token.
+    repository:
+      owner: microsoft
+      name: winget-pkgs
+
 # No release section: release.yaml always runs this with --skip=publish,
 # since goreleaser's own GitHub release handling cannot see the draft
 # release release-me already created for the tag (GitHub's "get a release

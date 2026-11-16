@@ -254,8 +254,23 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
       - run: task test:formula
+
+  # Renders the winget manifest from a snapshot build and checks it against
+  # the archives and checksums built in the same run, so a goreleaser change
+  # that breaks the manifest fails here instead of on a release.
+  winget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
+      - run: task test:winget
 
   build:
     runs-on: ubuntu-latest

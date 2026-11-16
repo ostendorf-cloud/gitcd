@@ -15,12 +15,49 @@ gitcd version
   out to git.
 - Why a formula and not a cask: `docs/adr/0003-homebrew-formula-not-cask.md`.
 
+## winget
+
+On Windows, once the first manifest pull request to `microsoft/winget-pkgs` is merged:
+
+```powershell
+winget install OstendorfCloud.gitcd
+gitcd version
+```
+
+- Not available yet. The first release has to exist and the owner has to submit the manifest
+  first, see "Submitting to winget" below. Until then use a release archive.
+- The package is the `zip` archive of the release for `x64` or `arm64`. winget installs the
+  portable `gitcd.exe` and adds the alias `gitcd` to the `PATH`. The manifest also lists the
+  moniker `gitcd`.
+- The manifest declares `Git.Git` as a dependency, since the commands that touch repositories
+  shell out to git.
+- `winget upgrade OstendorfCloud.gitcd` follows each version the owner submits.
+
+### Shell integration on PowerShell
+
+The manifest cannot change the shell, so `cd` does not change the directory after a plain
+install. Add this line to the PowerShell profile (`notepad $PROFILE`) to turn the integration on:
+
+```powershell
+Invoke-Expression (gitcd shell-init pwsh | Out-String)
+```
+
+- `pwsh` is PowerShell 7. Windows PowerShell 5.1 uses `powershell`, which prints the identical
+  snippet. See `shell-init` in `docs/commands.md`.
+- The snippet defines a `gitcd` function that changes the directory for `clone`, `path` and
+  `cd`, and registers tab completion for `cd`.
+- `shell-init` knows no Command Prompt (`cmd.exe`). There `gitcd path <query>` still prints
+  the path, but nothing changes the directory.
+
 ## Release archives
 
 Every release on GitHub carries a `tar.gz` per Linux and macOS system and a `zip` for Windows,
 for `amd64` and `arm64`, with a checksums file and its signature bundle. It also carries
 `gitcd.rb`, the formula the build generated. The pipeline pushes that file to the tap, `brew`
-does not read it from there. That makes nine assets.
+does not read it from there. Three more files are the winget manifest set the build generated
+(`OstendorfCloud.gitcd.yaml`, `OstendorfCloud.gitcd.installer.yaml` and
+`OstendorfCloud.gitcd.locale.en-US.yaml`). Nothing reads them from the release automatically,
+the owner submits them. That makes twelve assets.
 
 ## Verify a download
 
@@ -86,16 +123,87 @@ For maintainers and the infrastructure repository. Keyless signing has no key an
 - Permission: `id-token: write` on the `release` job only.
 - Decision and alternatives: `docs/adr/0004-keyless-signing.md`.
 
+## Publisher identity for winget
+
+For maintainers and the infrastructure repository. winget has no account and no secret in this
+pipeline.
+
+- Package identifier: `OstendorfCloud.gitcd`. Moniker: `gitcd`.
+- Publisher name: `Ostendorf Cloud`. The identifier and the folder
+  `manifests/o/OstendorfCloud/gitcd/` in `microsoft/winget-pkgs` are claimed by the first merged
+  pull request.
+- Submitter: the owner's personal GitHub account, by hand. No organisation account, app or
+  token for `microsoft/winget-pkgs` exists, and none is needed.
+- Secrets and permissions: none added. The release workflow never contacts that repository.
+- Nothing for the infrastructure repository to create or rotate. It records the identifier and
+  the publisher name above.
+- Decision and alternatives: `docs/adr/0005-winget-manifest-semi-automatic.md`.
+
+## Submitting to winget
+
+For the owner, on Windows. The release attaches the manifest set, the owner files the pull
+request. The manifest names published release assets, so wait for the release to be public.
+
+Submit only stable releases. A release of a pre-release tag (`rc`, `beta`, `alpha`) carries a
+manifest too, since the release script treats every tag alike. Never submit that one. This
+mirrors the `homebrew` job, which skips pre-releases. The policy of `microsoft/winget-pkgs` for
+pre-release versions was not looked up.
+
+First version:
+
+1. Download the three `OstendorfCloud.gitcd*.yaml` assets of the release into one empty folder,
+   and the checksums file with its signature bundle. Verify the checksums file with
+   `cosign verify-blob`, see "Verify a download". The manifest files are not signed
+   themselves. Then run the check on the three files from a checkout of the same tag, in a bash
+   such as the one Git for Windows ships, and do not submit unless it exits 0:
+
+   ```sh
+   scripts/check-winget-manifest.sh <downloaded folder> <tag> <verified checksums file>
+   ```
+
+   It compares every line with the generated template, every URL with this repository's
+   release download of the tag and every `sha256` with the verified checksums file. It was not
+   run on Windows.
+2. Fork `microsoft/winget-pkgs` with the personal account and clone it. Create a branch.
+3. Copy the three files unchanged into `manifests/o/OstendorfCloud/gitcd/<version>/`, with
+   `<version>` the tag without its `v`. The file names stay as they are.
+4. Run `winget validate --manifest manifests/o/OstendorfCloud/gitcd/<version>`. Optionally
+   install from the folder with `winget install --manifest <folder>` after enabling local
+   manifest files in the winget settings, as the repository's `doc/Authoring.md` describes.
+5. Commit, push the branch to the fork and open a pull request against `microsoft/winget-pkgs`.
+   One pull request holds one package version. Follow the repository's pull request template.
+6. A GitHub App runs the validation pipeline on the manifest and its installers and reports on
+   the pull request. The repository's `doc/Validation.md` and `doc/ValidationFailureGuide.md`
+   describe the steps and the failures. Fix a failure in the manifest by changing
+   `.goreleaser.yaml` and the next release, never by editing the checksums by hand.
+7. After the merge, check on a Windows machine that `winget install OstendorfCloud.gitcd` works
+   and that `gitcd version` runs. Only then is the issue done.
+
+Later versions, until the submission is automated by a separate decision:
+
+- Do the same with the files of the new release, check included. Winget's tooling wants all
+  three files, and these carry the checksums of the published archives.
+- Or run `wingetcreate update OstendorfCloud.gitcd --version <version> --urls
+  "<arm64 zip url>|arm64" "<x64 zip url>|x64"`, which fits once the package is in
+  `microsoft/winget-pkgs`: the tool needs as many URLs as the manifest has installers (two) and
+  accepts the `<url>|<architecture>` form. It downloads the archives and works the checksums out
+  itself. `--submit` and a token of the personal account file the pull request. How
+  `wingetcreate` treats a `zip` with a nested portable file is not documented in the pages read
+  here and was not run.
+
 ## Release pipeline
 
 For maintainers. `release.yaml` runs these in order:
 
 1. `release-me` tags and drafts the release.
-2. `scripts/publish-release-assets.sh` builds the archives and the formula in one goreleaser
-   run, which also signs the checksums with cosign. It refuses to go on without exactly one
-   non-empty bundle, and verifies the bundle with the command above, before anything is
-   attached. Only then it records the formula's sha256 as the `formula-hashes` job output,
-   attaches the files and publishes the release.
+2. `scripts/publish-release-assets.sh` builds the archives, the formula and the winget
+   manifest in one goreleaser run, which also signs the checksums with cosign. It refuses to go
+   on without exactly one non-empty bundle and without the complete manifest set of three files.
+   It checks the manifest with `scripts/check-winget-manifest.sh` against the tag and the
+   checksums file of the run, and verifies the bundle with the command above, before anything is
+   attached. Only then it
+   records the formula's sha256 as the `formula-hashes` job output, attaches the files and
+   publishes the release. It never contacts `microsoft/winget-pkgs`.
 3. The `homebrew` job runs `scripts/publish-homebrew-formula.sh`. It reads the formula back from
    the published release and verifies it against the build: the sha256 must be the recorded one,
    and every line must be part of the generated template

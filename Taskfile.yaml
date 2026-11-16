@@ -114,6 +114,25 @@ tasks:
       - scripts/check-goreleaser-output_test.sh
       - scripts/check-homebrew-formula_test.sh
       - scripts/publish-homebrew-formula_test.sh
+      - scripts/check-winget-manifest_test.sh
+
+  test:winget:
+    desc: Render the winget manifest from a snapshot build and check it
+    cmds:
+      - goreleaser release --snapshot --clean --skip=announce,validate,publish,sign
+      - |
+        set -- dist/winget/manifests/o/OstendorfCloud/gitcd/*/
+        [ "$#" -eq 1 ] && [ -d "$1" ] || { echo "expected exactly one winget version directory" >&2; exit 1; }
+        dir="${1%/}"
+        set -- dist/gitcd_*_checksums.txt
+        [ "$#" -eq 1 ] && [ -s "$1" ] || { echo "expected exactly one checksums file" >&2; exit 1; }
+        checksums="$1"
+        # A snapshot names its own version, which the checksums file name
+        # carries. The tag in the URLs is the one goreleaser assumes.
+        version="${checksums#dist/gitcd_}"
+        version="${version%_checksums.txt}"
+        tag="$(grep -m1 -oE 'releases/download/[^/]+' "${dir}/OstendorfCloud.gitcd.installer.yaml" | cut -d/ -f3)"
+        scripts/check-winget-manifest.sh "${dir}" "${tag}" "${checksums}" "${version}"
 
   test:formula:
     desc: Render the Homebrew formula from a snapshot build and check it
@@ -152,6 +171,7 @@ tasks:
       - task: test:pwsh
       - task: test:shell
       - task: test:formula
+      - task: test:winget
       - task: build
 
   fmt:
