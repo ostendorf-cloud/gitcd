@@ -220,6 +220,17 @@ existing `[include]` section: `git config --global --add` inserts a new key into
 rather than at the end of the file, and a key sitting after it would keep beating every
 `includeIf` value `gitcd apply` adds, silently.
 
+With `--dry-run` and a move, `init` runs the same checks as the real run on the content the move
+would leave behind. A global file that only passes the include check once the keys are moved
+out is accepted, and a `~/.gitcd.yaml` the updated profile would not load from exits `1`, as
+the real run does. `--dry-run` does not predict a file that cannot be written, a backup or the
+updated configuration, such as a read only directory or a file already at the backup path. It
+prints `would back up` or `would move` and exits `0` where the real run exits `1`. The backup
+name carries a timestamp taken at the real run, and an exact write check would have to create
+a file. A preview of a move also needs a writable temporary directory, `TMPDIR` on Unix, for
+a short lived scratch copy of the files. Without one, `--dry-run` exits `1` where the real
+run succeeds.
+
 ```sh
 $ gitcd init
 /home/me/.gitconfig sets user.name, user.email directly, outside any profile:

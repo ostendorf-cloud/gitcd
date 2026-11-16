@@ -235,6 +235,15 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stderr, "gitcd init: back up %s: %v\n", cfgPath, err)
 				return 1
 			}
+			// The checks and the content the real move produces, computed
+			// without touching either file, so the steps below see what the
+			// real run sees.
+			moved, err := previewMove(ctx, found, target, globalPath, cfgPath, existingYAML, content)
+			if err != nil {
+				fmt.Fprintf(stderr, "gitcd init: %v\n", err)
+				return 1
+			}
+			content = moved
 		default:
 			if err := moveGlobalIdentity(ctx, found, target, globalPath, backupGlobalConfig, stdout); err != nil {
 				fmt.Fprintf(stderr, "gitcd init: %v\n", err)
@@ -479,13 +488,9 @@ func moveGlobalIdentity(
 		return fmt.Errorf("back up %s: %w: aborted before changing any file", cfgPath, err)
 	}
 
-	keys := make(map[string]string, len(found))
-	for _, v := range found {
-		keys[v.Key] = v.Value
-	}
-	updatedYAML, err := config.AddProfileKeys(existingYAML, target, keys)
+	updatedYAML, err := renderMovedConfig(cfgPath, existingYAML, target, found)
 	if err != nil {
-		return fmt.Errorf("%s: %w", cfgPath, err)
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(cfgPath), err)
@@ -559,22 +564,8 @@ func moveGlobalIdentity(
 		return fmt.Errorf("write %s: %w", tmpPath, err)
 	}
 
-	cfg, err := config.LoadFrom(tmpPath)
-	if err != nil {
-		return fmt.Errorf("the updated configuration would not load, aborting before touching %s: %w", globalPath, err)
-	}
-	// A cheap belt and braces on top of LoadFrom succeeding: LoadFrom not
-	// erroring only proves the rendered file is valid YAML and a valid
-	// gitcd configuration, not that this particular edit actually landed
-	// in it, which is exactly the gap a "profiles:" key decoding to a
-	// "!!null" scalar opened. identityKeysLanded parses the same bytes
-	// that are about to replace cfgPath, through the same loader every
-	// other command uses, so it catches a future shape of this class
-	// regardless of where in the render path it originates, and it runs
-	// before the rename and before the unset loop below, so a failure
-	// here guarantees the global keys are never removed.
-	if err := identityKeysLanded(cfg, target, found); err != nil {
-		return fmt.Errorf("the write that was supposed to move %s did not, aborting before touching %s: %w", describeIdentityKeys(found), globalPath, err)
+	if err := validateMovedConfig(tmpPath, globalPath, target, found); err != nil {
+		return err
 	}
 
 	if err := os.Rename(tmpPath, writeTarget); err != nil {
@@ -595,6 +586,89 @@ func moveGlobalIdentity(
 		target,
 	)
 	return nil
+}
+
+// renderMovedConfig returns the configuration file content with found
+// recorded in profile target, the bytes moveGlobalIdentity writes. It is
+// shared with the dry run so the two cannot disagree on what the move
+// produces or on whether the existing file accepts the edit.
+func renderMovedConfig(cfgPath string, existingYAML []byte, target string, found []git.GlobalIdentityValue) ([]byte, error) {
+	keys := make(map[string]string, len(found))
+	for _, v := range found {
+		keys[v.Key] = v.Value
+	}
+	updatedYAML, err := config.AddProfileKeys(existingYAML, target, keys)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", cfgPath, err)
+	}
+	return updatedYAML, nil
+}
+
+// validateMovedConfig loads the rendered configuration at tmpPath through
+// config.LoadFrom and checks that every moved key landed in profile target.
+// The error names globalPath as the file left untouched.
+func validateMovedConfig(tmpPath, globalPath, target string, found []git.GlobalIdentityValue) error {
+	cfg, err := config.LoadFrom(tmpPath)
+	if err != nil {
+		return fmt.Errorf("the updated configuration would not load, aborting before touching %s: %w", globalPath, err)
+	}
+	// A cheap belt and braces on top of LoadFrom succeeding: LoadFrom not
+	// erroring only proves the rendered file is valid YAML and a valid
+	// gitcd configuration, not that this particular edit actually landed
+	// in it, which is exactly the gap a "profiles:" key decoding to a
+	// "!!null" scalar opened. identityKeysLanded parses the same bytes
+	// that are about to replace cfgPath, through the same loader every
+	// other command uses, so it catches a future shape of this class
+	// regardless of where in the render path it originates, and it runs
+	// before the rename and before the unset loop, so a failure here
+	// guarantees the global keys are never removed.
+	if err := identityKeysLanded(cfg, target, found); err != nil {
+		return fmt.Errorf("the write that was supposed to move %s did not, aborting before touching %s: %w", describeIdentityKeys(found), globalPath, err)
+	}
+	return nil
+}
+
+// previewMove is the dry run of moveGlobalIdentity after the backups. It
+// renders and validates the updated configuration the way the real move
+// does, in a scratch directory instead of next to cfgPath, and applies the
+// same git unset to a scratch copy of the global file. It returns the global
+// content the real run would hold after the move and writes neither real
+// file. Failures it returns are the ones the real run hits at that point.
+func previewMove(
+	ctx context.Context, found []git.GlobalIdentityValue, target, globalPath, cfgPath string, existingYAML, globalContent []byte,
+) ([]byte, error) {
+	updatedYAML, err := renderMovedConfig(cfgPath, existingYAML, target, found)
+	if err != nil {
+		return nil, err
+	}
+	scratch, err := os.MkdirTemp("", "gitcd-init-dry-run-")
+	if err != nil {
+		return nil, fmt.Errorf("create a scratch directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+
+	yamlPath := filepath.Join(scratch, filepath.Base(cfgPath))
+	if err := os.WriteFile(yamlPath, updatedYAML, 0o600); err != nil {
+		return nil, fmt.Errorf("write %s: %w", yamlPath, err)
+	}
+	if err := validateMovedConfig(yamlPath, globalPath, target, found); err != nil {
+		return nil, err
+	}
+
+	globalCopy := filepath.Join(scratch, "global-gitconfig")
+	if err := os.WriteFile(globalCopy, globalContent, 0o600); err != nil {
+		return nil, fmt.Errorf("write %s: %w", globalCopy, err)
+	}
+	for _, v := range found {
+		if err := git.ConfigUnsetFile(ctx, globalCopy, v.Key); err != nil {
+			return nil, fmt.Errorf("remove %s from %s: %w", v.Key, globalPath, err)
+		}
+	}
+	moved, err := os.ReadFile(globalCopy)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", globalCopy, err)
+	}
+	return moved, nil
 }
 
 // identityKeysLanded reports an error naming the first of found's keys
