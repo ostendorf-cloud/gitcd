@@ -42,22 +42,21 @@ func carriesCredential(remoteURL string) bool {
 	return errors.Is(err, remote.ErrMalformedURL) || errors.Is(err, remote.ErrAmbiguousUserinfo)
 }
 
-// urlConfigPattern selects every configuration entry that can put a URL
-// in front of git: the URL and push URL of any remote, and the rewrite
-// rules "url.<base>.insteadOf" and "url.<base>.pushInsteadOf", whose base
-// replaces a prefix of the remote's own URL.
-const urlConfigPattern = `^(remote\..*\.(url|pushurl)|url\..*\.(insteadof|pushinsteadof))$`
+// allConfigPattern selects every configuration entry. Which entries hold a
+// URL is decided in one place, urlLikeKey, so the entries read from the
+// configuration files and the "-c" pairs cannot disagree about it.
+const allConfigPattern = `.`
 
 // configuredURLsCarryCredential reports whether any URL the configuration
-// visible to run can make git use carries a credential. That is every
-// remote's url and pushurl, and both the base and the rewritten prefix of
+// visible to run can make git use carries a credential. That is the value of
+// every key urlLikeKey names, and both the base and the rewritten prefix of
 // every insteadOf and pushInsteadOf rule, from every configuration scope,
 // since "git fetch" may use the branch's tracked remote, or the only
 // remote there is, not just "origin". When the configuration cannot be
 // read, it fails closed and reports true. No match at all is not a
 // failure: git exits 1 for it.
 func configuredURLsCarryCredential(run runner) bool {
-	out, err := run("config", "-z", "--get-regexp", urlConfigPattern)
+	out, err := run("config", "-z", "--get-regexp", allConfigPattern)
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
@@ -67,17 +66,15 @@ func configuredURLsCarryCredential(run runner) bool {
 	}
 	for _, entry := range strings.Split(string(out), "\x00") {
 		key, value, _ := strings.Cut(entry, "\n")
-		if key == "" {
+		if key == "" || !urlLikeKey(key) {
 			continue
 		}
-		if carriesCredential(value) {
+		if valueCarriesCredential(key, value) {
 			return true
 		}
 		// The base of a rewrite rule is part of its key.
-		if rest, ok := strings.CutPrefix(key, "url."); ok {
-			if i := strings.LastIndexByte(rest, '.'); i >= 0 && carriesCredential(rest[:i]) {
-				return true
-			}
+		if base, ok := rewriteBase(key); ok && carriesCredential(base) {
+			return true
 		}
 	}
 	return false
@@ -89,7 +86,7 @@ func configuredURLsCarryCredential(run runner) bool {
 func configPairsCarryCredential(config map[string]string) bool {
 	for key, value := range config {
 		if urlLikeKey(key) || strings.Contains(value, "://") {
-			if carriesCredential(value) {
+			if valueCarriesCredential(key, value) {
 				return true
 			}
 		} else if remote.Redact(value) != value {
@@ -97,25 +94,98 @@ func configPairsCarryCredential(config map[string]string) bool {
 			// a "#" in it is no query.
 			return true
 		}
-		if rest, ok := strings.CutPrefix(key, "url."); ok {
-			if i := strings.LastIndexByte(rest, '.'); i >= 0 && carriesCredential(rest[:i]) {
-				return true
-			}
+		if base, ok := rewriteBase(key); ok && carriesCredential(base) {
+			return true
 		}
 	}
 	return false
 }
 
-// urlLikeKey reports whether a configuration key holds a URL: a remote's url
-// or pushurl, or the "insteadOf" and "pushInsteadOf" of a rewrite rule.
+// urlLikeKey reports whether the value of a configuration key is a URL, a
+// proxy URL or a remote's address, so a "?" or "#" in it is a query or a
+// fragment. A value under any other key is free text, such as a user name
+// "Team #1". It is the one place that decides it: the entries read from the
+// configuration files and the "-c" pairs both go through it.
+//
+// Section and variable names are matched case insensitively, as git does.
+// The subsection, between the first and the last dot, is a name or a URL.
+//
+//	key                       value                           why
+//	remote.<name>.url         the remote's URL                address git contacts
+//	remote.<name>.pushurl     the push URL                    address git pushes to
+//	submodule.<name>.url      a submodule's URL               address git contacts
+//	<section>.url             a URL (any section)             see below
+//	url.<base>.insteadOf      the prefix that is rewritten    URL prefix
+//	url.<base>.pushInsteadOf  the prefix that is rewritten    URL prefix
+//	http.proxy                a proxy, host[:port][/path]     curl accepts it without a scheme
+//	http.<url>.proxy          a proxy, as above               curl accepts it without a scheme
+//	remote.<name>.proxy       a proxy, as above               curl accepts it without a scheme
+//	fetch.bundleURI           a bundle URI                    address git downloads from
+//	bundle.<id>.uri           a bundle URI                    address git downloads from
+//
+// The ".url" suffix is not limited to the sections above. It also matches a
+// key such as "alias.url" or "gitweb.url", whose value is then read as a
+// URL: a value with a "?" or a "#" under such a key is treated as a query.
+//
+// Left out on purpose: core.gitProxy and credential.helper hold a command,
+// and http.extraHeader a header line, all free text. A key whose subsection
+// is a URL, as in "http.<url>.sslVerify", only selects which URL a setting
+// applies to: only its value is read, and for "url.<base>.insteadOf" the
+// base, see rewriteBase.
 func urlLikeKey(key string) bool {
 	key = strings.ToLower(key)
+	if key == "fetch.bundleuri" || isProxyKey(key) {
+		return true
+	}
 	for _, suffix := range []string{".url", ".pushurl", ".insteadof", ".pushinsteadof"} {
 		if strings.HasSuffix(key, suffix) {
 			return true
 		}
 	}
-	return false
+	return strings.HasPrefix(key, "bundle.") && strings.HasSuffix(key, ".uri")
+}
+
+// isProxyKey reports whether key sets a proxy: "http.proxy",
+// "http.<url>.proxy" or "remote.<name>.proxy". The section and the variable
+// are matched case insensitively.
+func isProxyKey(key string) bool {
+	key = strings.ToLower(key)
+	return (strings.HasPrefix(key, "http.") || strings.HasPrefix(key, "remote.")) && strings.HasSuffix(key, ".proxy")
+}
+
+// valueCarriesCredential reports whether the value of the key holds a
+// credential, a query or a fragment. A proxy may be written without a scheme,
+// as "user:secret@host:3128" or "host:3128/path?query", which curl reads as a
+// proxy URL: it is checked as if it began with "http://", so its user name,
+// password, query and fragment are found. A user name without a password
+// counts too, as it does in any other URL. An empty value, which turns the
+// proxy off, and a plain "host:port" carry nothing.
+func valueCarriesCredential(key, value string) bool {
+	if isProxyKey(key) && value != "" && !strings.Contains(value, "://") {
+		value = "http://" + value
+	}
+	return carriesCredential(value)
+}
+
+// rewriteBase returns the base of a "url.<base>.insteadOf" or
+// "url.<base>.pushInsteadOf" key, which is part of the key itself. The
+// section and the variable are matched case insensitively, the base keeps
+// its case, as git does.
+func rewriteBase(key string) (string, bool) {
+	const section = "url."
+	if len(key) < len(section) || !strings.EqualFold(key[:len(section)], section) {
+		return "", false
+	}
+	rest := key[len(section):]
+	i := strings.LastIndexByte(rest, '.')
+	if i < 0 {
+		return "", false
+	}
+	switch strings.ToLower(rest[i+1:]) {
+	case "insteadof", "pushinsteadof":
+		return rest[:i], true
+	}
+	return "", false
 }
 
 // foldOutput returns the text of git's output to fold into an error for a

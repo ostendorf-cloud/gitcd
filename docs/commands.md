@@ -40,6 +40,18 @@ git's own output, a URL's query ends at white space or a quote. Git's output is 
 on the configuration visible before the clone, so a rewrite that only applies inside the new
 repository is not considered.
 
+A `?` or `#` in a value counts as a query or a fragment only under a key that holds a URL:
+any key ending in `.url` such as `remote.<name>.url` and `submodule.<name>.url`,
+`remote.<name>.pushurl`, `remote.<name>.proxy`, `http.proxy`, `http.<url>.proxy`,
+`url.<base>.insteadOf`, `url.<base>.pushInsteadOf`, `fetch.bundleURI` and `bundle.<id>.uri`.
+gitcd reads these keys from the configuration files git reads, in every scope, and from `-c`
+pairs it passes itself. A proxy value is read as a URL even without a scheme, so
+`user:secret@host:3128` and `host:3128/path?query` count, and so does a user name without a
+password. An empty proxy and a plain `host:port` do not. Git matches section and variable names
+without regard to case, and so does gitcd. Any other value, such as a user name `Team #1`, is
+plain text. The `.url` rule covers every key with that ending, such as `gitweb.url` or
+`lfs.url`: a `?`, `#` or `@` in such a value also hides git's messages for that run.
+
 Two user names are not a credential and are shown as they are, with git's output kept:
 
 - A plain user name on an `ssh://` URL, as in `ssh://git@host/acme/widget.git`, and the scp

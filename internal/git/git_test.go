@@ -283,6 +283,19 @@ func TestConfiguredURLsCarryCredential(t *testing.T) {
 		{name: "query in a push url", out: "remote.origin.url\nhttps://h.test/a/w.git\x00remote.origin.pushurl\nhttps://h.test/a/w.git?a=b\x00", want: true},
 		{name: "query in another remote", out: "remote.origin.url\nhttps://h.test/a/w.git\x00remote.other.url\nhttps://g.test/a/w.git?a=b\x00", want: true},
 		{name: "query in a rewrite base", out: "url.https://h.test/x?a=b.insteadof\nhttps://elsewhere.test/\x00", want: true},
+		{name: "query in a rewrite base written in upper case", out: "URL.https://h.test/x?a=b.INSTEADOF\nhttps://elsewhere.test/\x00", want: true},
+		{name: "query in a push rewrite base written in mixed case", out: "Url.https://h.test/x?a=b.PushInsteadOf\nhttps://elsewhere.test/\x00", want: true},
+		{name: "query in a proxy", out: "http.proxy\nh.test:3128/x?a=b\x00", want: true},
+		{name: "query in a proxy for a url", out: "http.https://h.test/.proxy\nh.test:3128/x?a=b\x00", want: true},
+		{name: "query in a remote proxy", out: "remote.origin.proxy\nh.test:3128/x#a\x00", want: true},
+		{name: "user and password in a proxy without a scheme", out: "http.proxy\nuser:pw@h.test:3128\x00", want: true},
+		{name: "plain proxy", out: "http.proxy\nh.test:3128\x00", want: false},
+		{name: "empty proxy", out: "http.proxy\n\x00", want: false},
+		{name: "query in a bundle uri", out: "fetch.bundleuri\nfile:///missing/b?a=b\x00", want: true},
+		{name: "query in a bundle list uri", out: "bundle.one.uri\nfile:///missing/b?a=b\x00", want: true},
+		{name: "plain bundle uri", out: "fetch.bundleuri\nfile:///missing/b\x00", want: false},
+		{name: "key that is no rewrite rule with a query in its subsection", out: "url.https://h.test/?tok.foo\nplain\x00", want: false},
+		{name: "number sign in a value under a key that holds no url", out: "user.name\nTeam #1\x00core.gitproxy\nssh #1\x00", want: false},
 		{name: "query in a rewrite value", out: "url.git@h.test:.insteadof\nhttps://h.test/x?a=b\x00", want: true},
 		{name: "query in a push rewrite base", out: "url.https://h.test/x?a=b.pushinsteadof\nhttps://elsewhere.test/\x00", want: true},
 		{name: "query in a push rewrite value", out: "url.git@h.test:.pushinsteadof\nhttps://h.test/x#a\x00", want: true},
@@ -316,10 +329,47 @@ func TestConfigPairsCarryCredential(t *testing.T) {
 		{name: "plain email", config: map[string]string{"user.email": "dev@h.test"}, want: false},
 		{name: "rewrite value with a query", config: map[string]string{"url.file:///missing/.insteadOf": "https://h.test/x?a=b"}, want: true},
 		{name: "rewrite value with a fragment and no scheme", config: map[string]string{"url.file:///missing/.pushInsteadOf": "h.test:acme/x#a"}, want: true},
-		{name: "rewrite base with a query", config: map[string]string{"url.file:///missing/?a=b.insteadOf": "https://h.test/"}, want: true},
+		{name: "rewrite base with a query", config: map[string]string{"url.file:///missing/?tok.insteadOf": "https://h.test/"}, want: true},
 		{name: "remote url with a query", config: map[string]string{"remote.origin.url": "h.test/acme/x?a"}, want: true},
 		{name: "other key holding a url with a query", config: map[string]string{"core.hooksPath": "https://h.test/x?a"}, want: true},
 		{name: "other key holding a credential", config: map[string]string{"user.name": "https://u:p@h.test/x"}, want: true},
+		{name: "upper case section and query in the base", config: map[string]string{"URL.file:///missing/?tok.insteadOf": "https://h.test/"}, want: true},
+		{name: "mixed case section and query in the base", config: map[string]string{"Url.file:///missing/?tok.insteadOf": "https://h.test/"}, want: true},
+		{name: "upper case variable and query in the base", config: map[string]string{"url.file:///missing/?tok.INSTEADOF": "https://h.test/"}, want: true},
+		{name: "mixed case push variable and query in the base", config: map[string]string{"url.file:///missing/?tok.PushInsteadOf": "https://h.test/"}, want: true},
+		{name: "upper case rewrite with a query in the value", config: map[string]string{"URL.file:///missing/.INSTEADOF": "https://h.test/x?a=b"}, want: true},
+		{name: "mixed case rewrite with a query in the value", config: map[string]string{"Url.file:///missing/.PushInsteadOf": "h.test:acme/x#a"}, want: true},
+		{name: "upper case rewrite without a query", config: map[string]string{"URL.file:///missing/.INSTEADOF": "https://h.test/"}, want: false},
+		{name: "upper case remote url with a query", config: map[string]string{"REMOTE.origin.URL": "h.test/acme/x?a"}, want: true},
+		{name: "http proxy with a query and no scheme", config: map[string]string{"http.proxy": "proxy.test:3128/x?a=b"}, want: true},
+		{name: "upper case http proxy with a query and no scheme", config: map[string]string{"HTTP.PROXY": "proxy.test:3128/x?a=b"}, want: true},
+		{name: "mixed case http proxy with a fragment", config: map[string]string{"Http.Proxy": "proxy.test:3128#a"}, want: true},
+		{name: "http proxy with a query and a scheme", config: map[string]string{"http.proxy": "http://proxy.test:3128/?a=b"}, want: true},
+		{name: "http proxy with a credential", config: map[string]string{"http.proxy": "http://u:p@proxy.test:3128"}, want: true},
+		{name: "http proxy for a url with a query", config: map[string]string{"http.https://h.test/.proxy": "proxy.test:3128/x?a=b"}, want: true},
+		{name: "remote proxy with a query", config: map[string]string{"remote.origin.proxy": "proxy.test:3128?a=b"}, want: true},
+		{name: "bundle uri with a query", config: map[string]string{"fetch.bundleURI": "h.test/b.bundle?a=b"}, want: true},
+		{name: "bundle list uri with a query", config: map[string]string{"bundle.one.uri": "h.test/b.bundle?a=b"}, want: true},
+		{name: "http proxy without a query", config: map[string]string{"http.proxy": "proxy.test:3128"}, want: false},
+		{name: "upper case http proxy without a query", config: map[string]string{"HTTP.PROXY": "http://proxy.test:3128"}, want: false},
+		{name: "http proxy for a url without a query", config: map[string]string{"http.https://h.test/.proxy": "proxy.test:3128"}, want: false},
+		{name: "proxy command with a number sign", config: map[string]string{"core.gitProxy": "ssh -p 22 #1"}, want: false},
+		{name: "credential helper with a question mark", config: map[string]string{"credential.helper": "cache --timeout 1?"}, want: false},
+		{name: "extra header with a number sign", config: map[string]string{"http.extraHeader": "X-Team: #1"}, want: false},
+		{name: "http key with a url subsection and a plain value", config: map[string]string{"http.https://h.test/?tok.sslVerify": "false"}, want: false},
+		{name: "key that is no rewrite rule with a query in its subsection", config: map[string]string{"url.https://h.test/?tok.foo": "plain"}, want: false},
+		{name: "proxy without a scheme with a user and a password", config: map[string]string{"http.proxy": "user:pw@h.test:3128"}, want: true},
+		{name: "proxy without a scheme with a user and a password and a path", config: map[string]string{"http.proxy": "user:pw@h.test:3128/x"}, want: true},
+		{name: "proxy without a scheme with a path and a query", config: map[string]string{"http.proxy": "h.test:3128/p?q"}, want: true},
+		{name: "proxy with a scheme with a user and a password", config: map[string]string{"http.proxy": "socks5://user:pw@h.test:1080"}, want: true},
+		{name: "proxy without a scheme with a user and no password", config: map[string]string{"http.proxy": "user@h.test:3128"}, want: true},
+		{name: "remote proxy without a scheme with a user and a password", config: map[string]string{"remote.origin.proxy": "user:pw@h.test:3128"}, want: true},
+		{name: "upper case proxy key without a scheme with a user and a password", config: map[string]string{"HTTP.PROXY": "user:pw@h.test:3128"}, want: true},
+		{name: "proxy without a scheme and without a user", config: map[string]string{"http.proxy": "h.test:3128"}, want: false},
+		{name: "proxy with a scheme and without a user", config: map[string]string{"http.proxy": "socks5://h.test:1080"}, want: false},
+		{name: "empty proxy", config: map[string]string{"http.proxy": ""}, want: false},
+		{name: "empty remote proxy", config: map[string]string{"remote.origin.proxy": ""}, want: false},
+		{name: "proxy auth method", config: map[string]string{"http.proxyAuthMethod": "basic"}, want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -400,13 +450,39 @@ func TestClone_WithAQueryStreamsNothingFromGit(t *testing.T) {
 		},
 		{
 			name:      "pair with a query in the rewritten prefix",
-			remoteURL: "https://h.invalid/acme/widget.git",
-			config:    map[string]string{"url.file://" + missing + "/.insteadOf": "https://h.invalid/?a=FAKEQUERY"},
+			remoteURL: "file://" + missing + "/widget.git",
+			config:    map[string]string{"url.file://" + missing + "/.insteadOf": "https://h.invalid/?FAKEQUERY"},
 		},
 		{
 			name:      "pair with a query in the base",
 			remoteURL: "https://h.invalid/acme/widget.git",
-			config:    map[string]string{"url.file://" + missing + "/?a=FAKEQUERY.insteadOf": "https://h.invalid/"},
+			config:    map[string]string{"url.file://" + missing + "/?FAKEQUERY.insteadOf": "https://h.invalid/"},
+		},
+		{
+			name:      "pair with an upper case section and a query in the base",
+			remoteURL: "https://h.invalid/acme/widget.git",
+			config:    map[string]string{"URL.file://" + missing + "/?FAKEQUERY.INSTEADOF": "https://h.invalid/"},
+		},
+		{
+			name:      "pair with a mixed case section and a query in the value",
+			remoteURL: "file://" + missing + "/widget.git",
+			config:    map[string]string{"Url.file://" + missing + "/.InsteadOf": "https://h.invalid/?FAKEQUERY"},
+		},
+		{
+			name:      "pair with a mixed case push rewrite and a query in the base",
+			remoteURL: "https://h.invalid/acme/widget.git",
+			config:    map[string]string{"uRL.file://" + missing + "/?FAKEQUERY.PushInsteadOf": "https://h.invalid/"},
+		},
+		{
+			// Only the key says this value is a proxy: it has no scheme.
+			name:      "pair with an upper case proxy key and a query in a value without a scheme",
+			remoteURL: "file://" + missing + "/widget.git",
+			config:    map[string]string{"HTTP.PROXY": "proxy.invalid:3128/x?FAKEQUERY"},
+		},
+		{
+			name:      "pair with a proxy without a scheme and a password",
+			remoteURL: "file://" + missing + "/widget.git",
+			config:    map[string]string{"http.proxy": "FAKEQUERY:FAKESECRET@proxy.invalid:3128"},
 		},
 	}
 	for _, tt := range tests {
@@ -426,16 +502,79 @@ func TestClone_WithAQueryStreamsNothingFromGit(t *testing.T) {
 	}
 }
 
+// requireNoTestKeysInGlobalConfig fails when the global configuration file of
+// the test already holds a value a row wrote: every row starts from the file
+// setupGitEnv creates.
+func requireNoTestKeysInGlobalConfig(t *testing.T) {
+	t.Helper()
+	data, err := os.ReadFile(os.Getenv("GIT_CONFIG_GLOBAL"))
+	if err != nil {
+		t.Fatalf("read the global configuration: %v", err)
+	}
+	if strings.Contains(string(data), "FAKE") {
+		t.Fatalf("global configuration carries a value of an earlier row:\n%s", data)
+	}
+}
+
+// TestFetch_KeepsTheOutputForAFreeTextValueInTheConfiguration puts a "#" and
+// a "?" into values of keys that hold no URL, in the repository and in the
+// global file: git's output stays.
+func TestFetch_KeepsTheOutputForAFreeTextValueInTheConfiguration(t *testing.T) {
+	tests := []struct {
+		name   string
+		key    string
+		val    string
+		global bool
+	}{
+		{name: "user name with a number sign", key: "user.name", val: "Team #1"},
+		{name: "user name with a number sign in the global file", key: "user.name", val: "Team #1", global: true},
+		{name: "editor with a question mark", key: "core.editor", val: "vi ?", global: false},
+		{name: "editor with a question mark in the global file", key: "core.editor", val: "vi ?", global: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupGitEnv(t)
+			repo := t.TempDir()
+			initRepository(t, repo)
+			run(t, repo, "remote", "add", "origin", "https://127.0.0.1:1/acme/widget.git")
+			if tt.global {
+				run(t, repo, "config", "--global", tt.key, tt.val)
+			} else {
+				run(t, repo, "config", tt.key, tt.val)
+			}
+
+			err := git.Fetch(context.Background(), repo)
+			if err == nil {
+				t.Fatal("Fetch() succeeded, want a failure for an unreachable remote")
+			}
+			if strings.Contains(err.Error(), "withheld") || !strings.Contains(err.Error(), "127.0.0.1") {
+				t.Fatalf("Fetch() error = %v, want git's output kept", err)
+			}
+		})
+	}
+}
+
 // TestFetch_WithholdsOutputForAQueryInTheConfiguration puts a query into each
 // URL key git may read.
 func TestFetch_WithholdsOutputForAQueryInTheConfiguration(t *testing.T) {
-	setupGitEnv(t)
-
 	tests := []struct {
-		name string
-		key  string
-		val  string
+		name   string
+		key    string
+		val    string
+		global bool
 	}{
+		{name: "proxy with a path and a query", key: "http.proxy", val: "127.0.0.1:1/x?FAKEQUERY"},
+		{name: "proxy with a path and a query in the global file", key: "http.proxy", val: "127.0.0.1:1/x?FAKEQUERY", global: true},
+		{name: "proxy for a url", key: "http.https://127.0.0.1:1/.proxy", val: "127.0.0.1:1/x#FAKEQUERY"},
+		{name: "proxy for a url in the global file", key: "http.https://127.0.0.1:1/.proxy", val: "127.0.0.1:1/x#FAKEQUERY", global: true},
+		{name: "remote proxy", key: "remote.origin.proxy", val: "127.0.0.1:1/x?FAKEQUERY"},
+		{name: "remote proxy in the global file", key: "remote.origin.proxy", val: "127.0.0.1:1/x?FAKEQUERY", global: true},
+		{name: "proxy with a user and a password and no scheme", key: "http.proxy", val: "FAKEQUERY:FAKESECRET@127.0.0.1:1"},
+		{name: "proxy with a user and a password and no scheme in the global file", key: "http.proxy", val: "FAKEQUERY:FAKESECRET@127.0.0.1:1", global: true},
+		{name: "bundle uri", key: "fetch.bundleURI", val: "file:///missing/b.bundle?FAKEQUERY"},
+		{name: "bundle uri in the global file", key: "fetch.bundleURI", val: "file:///missing/b.bundle?FAKEQUERY", global: true},
+		{name: "bundle list uri", key: "bundle.one.uri", val: "file:///missing/b.bundle?FAKEQUERY"},
+		{name: "bundle list uri in the global file", key: "bundle.one.uri", val: "file:///missing/b.bundle?FAKEQUERY", global: true},
 		{name: "push url", key: "remote.origin.pushurl", val: "https://127.0.0.1:1/x.git?a=FAKEQUERY"},
 		{name: "another remote", key: "remote.other.url", val: "https://127.0.0.1:1/x.git?a=FAKEQUERY"},
 		{name: "rewrite base", key: "url.https://127.0.0.1:1/x?a=FAKEQUERY.insteadOf", val: "https://elsewhere.test/"},
@@ -445,10 +584,18 @@ func TestFetch_WithholdsOutputForAQueryInTheConfiguration(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Each row has its own global configuration file: a key written
+			// to it must not be visible to any other row.
+			setupGitEnv(t)
+			requireNoTestKeysInGlobalConfig(t)
 			repo := t.TempDir()
 			initRepository(t, repo)
 			run(t, repo, "remote", "add", "origin", "https://127.0.0.1:1/acme/widget.git")
-			run(t, repo, "config", tt.key, tt.val)
+			if tt.global {
+				run(t, repo, "config", "--global", tt.key, tt.val)
+			} else {
+				run(t, repo, "config", tt.key, tt.val)
+			}
 
 			err := git.Fetch(context.Background(), repo)
 			if err == nil {
