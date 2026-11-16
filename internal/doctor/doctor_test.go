@@ -421,7 +421,7 @@ func TestCheckGlobal(t *testing.T) {
 		}
 	})
 
-	t.Run("a target profile that does not exist yet is named as a suggestion, not as fact", func(t *testing.T) {
+	t.Run("a target the move refuses is not offered, --profile is", func(t *testing.T) {
 		content := []byte("[user]\n\temail = [email protected]\n")
 		findings, err := doctor.CheckGlobal(content, "/home/user/.gitconfig", "", "global", false)
 		if err != nil {
@@ -431,8 +431,8 @@ func TestCheckGlobal(t *testing.T) {
 		if !ok {
 			t.Fatalf("CheckGlobal() = %+v, want a %s finding", findings, doctor.KindGlobalIdentityKey)
 		}
-		if !strings.Contains(f.Message, "does not yet define") {
-			t.Fatalf("finding message = %q, want it to say the profile is not yet configured", f.Message)
+		if !strings.Contains(f.Message, `refuses "global"`) || !strings.Contains(f.Message, "--profile") {
+			t.Fatalf("finding message = %q, want it to say the default target is refused and point at --profile", f.Message)
 		}
 	})
 
@@ -449,7 +449,7 @@ func TestCheckGlobal(t *testing.T) {
 		if !strings.Contains(f.Message, "belongs instead in") {
 			t.Fatalf("finding message = %q, want it to read \"belongs instead in\"", f.Message)
 		}
-		if strings.HasSuffix(f.Message, "define instead") {
+		if strings.HasSuffix(f.Message, "instead") {
 			t.Fatalf("finding message = %q, want \"instead\" not trailing after the subclause", f.Message)
 		}
 	})

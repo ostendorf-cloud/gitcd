@@ -163,37 +163,379 @@ func TestRunDoctor_GlobalKeyPositionRelativeToTheGitcdInclude(t *testing.T) {
 	}
 }
 
-func TestRunDoctor_GlobalIdentityFindingNamesTheConfiguredDefaultProfile(t *testing.T) {
-	home := setupEnv(t)
-	// setupEnv's own baseline already sets a global user.name and
-	// user.email directly, exactly the KindGlobalIdentityKey finding
-	// this test inspects the wording of.
-	writeFile(t, filepath.Join(home, ".gitcd.yaml"), `
+// TestRunDoctor_GlobalIdentityHintMatchesWhatInitDoes runs doctor and then
+// "init --move-identity=yes" in the same home and compares them: the
+// target the doctor hint offers is accepted by init exactly when the hint
+// offers it, and a target the hint does not claim is never named as one.
+// setupEnv's own baseline sets a global user.name and user.email, the
+// finding whose wording is under test.
+func TestRunDoctor_GlobalIdentityHintMatchesWhatInitDoes(t *testing.T) {
+	const (
+		offersDefault  = `moves it into the new profile "global"`
+		refusesDefault = `refuses "global"`
+	)
+	tests := []struct {
+		name string
+		yaml string
+		// initArgs are added to --move-identity=yes. An explicit --profile
+		// is a choice doctor cannot know, so its rows only check that the
+		// hint does not claim the profile init refuses.
+		initArgs    []string
+		wantAccept  bool
+		wantOffers  bool
+		wantRefuses bool
+		// wantStderr names the conflict init reports when it refuses.
+		wantStderr string
+		// notNamed is a profile name the hint must not offer.
+		notNamed string
+	}{
+		{
+			name:       "no defaultProfile and no profiles",
+			yaml:       "",
+			wantAccept: true,
+			wantOffers: true,
+		},
+		{
+			name:       "a defaultProfile other than global",
+			yaml:       "profiles:\n  private:\n    user.email: jane@private.example\ndefaultProfile: private\n",
+			wantAccept: true,
+			wantOffers: true,
+			notNamed:   "private",
+		},
+		{
+			name:        "global is the defaultProfile",
+			yaml:        "profiles:\n  global:\n    user.email: jane@private.example\ndefaultProfile: global\n",
+			wantRefuses: true,
+			wantStderr:  "defaultProfile",
+		},
+		{
+			name:        "global is an existing profile and no defaultProfile",
+			yaml:        "profiles:\n  global:\n    user.email: jane@private.example\n",
+			wantRefuses: true,
+			wantStderr:  "already exists",
+		},
+		{
+			name:        "a profile that differs from global only in case",
+			yaml:        "profiles:\n  Global:\n    user.email: jane@private.example\n",
+			wantRefuses: true,
+			wantStderr:  "only in case",
+		},
+		{
+			name:       "an explicit unused profile with a defaultProfile",
+			yaml:       "profiles:\n  private:\n    user.email: jane@private.example\ndefaultProfile: private\n",
+			initArgs:   []string{"--profile=personal"},
+			wantAccept: true,
+			wantOffers: true,
+		},
+		{
+			name:       "an explicit profile naming the defaultProfile",
+			yaml:       "profiles:\n  private:\n    user.email: jane@private.example\ndefaultProfile: private\n",
+			initArgs:   []string{"--profile=private"},
+			wantOffers: true,
+			wantStderr: "defaultProfile",
+			notNamed:   "private",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := setupEnv(t)
+			cfgPath := filepath.Join(home, ".gitcd.yaml")
+			if tt.yaml != "" {
+				writeFile(t, cfgPath, tt.yaml)
+			}
+
+			var out, errOut bytes.Buffer
+			if code := run([]string{"doctor"}, &out, &errOut); code != 1 {
+				t.Fatalf("doctor = %d, want 1, stdout: %s stderr: %s", code, out.String(), errOut.String())
+			}
+			hint := out.String()
+			if got := strings.Contains(hint, offersDefault); got != tt.wantOffers {
+				t.Errorf("doctor offers the default target = %v, want %v, stdout: %s", got, tt.wantOffers, hint)
+			}
+			if got := strings.Contains(hint, refusesDefault); got != tt.wantRefuses {
+				t.Errorf("doctor says init refuses the default target = %v, want %v, stdout: %s", got, tt.wantRefuses, hint)
+			}
+			if !strings.Contains(hint, "--profile") {
+				t.Errorf("doctor stdout = %q, want it to name --profile", hint)
+			}
+			if tt.notNamed != "" && strings.Contains(hint, fmt.Sprintf("%q", tt.notNamed)) {
+				t.Errorf("doctor stdout = %q, want it not to name profile %q at all", hint, tt.notNamed)
+			}
+			globalBefore, err := os.ReadFile(globalConfigPath(home))
+			if err != nil {
+				t.Fatalf("read the global git configuration: %v", err)
+			}
+
+			var initOut, initErr bytes.Buffer
+			args := append([]string{"--move-identity=yes"}, tt.initArgs...)
+			code := runInit(args, strings.NewReader(""), &initOut, &initErr)
+			global, err := os.ReadFile(globalConfigPath(home))
+			if err != nil {
+				t.Fatalf("read the global git configuration: %v", err)
+			}
+			if tt.wantAccept {
+				if code != 0 {
+					t.Fatalf("init %v = %d, want it to accept the target the hint names, stderr: %s", args, code, initErr.String())
+				}
+				for _, line := range strings.Split(string(global), "\n") {
+					if strings.HasPrefix(strings.TrimSpace(line), "email") {
+						t.Errorf("global git configuration = %q, want the moved key gone", global)
+					}
+				}
+				return
+			}
+			if code != 1 {
+				t.Fatalf("init %v = %d, want a refusal, stdout: %s stderr: %s", args, code, initOut.String(), initErr.String())
+			}
+			if !strings.Contains(initErr.String(), tt.wantStderr) {
+				t.Errorf("init stderr = %q, want it to name %q", initErr.String(), tt.wantStderr)
+			}
+			if !bytes.Equal(global, globalBefore) {
+				t.Errorf("global git configuration = %q, want it unchanged after a refusal, was %q", global, globalBefore)
+			}
+			backups, err := filepath.Glob(filepath.Join(home, "*.gitcd-backup-*"))
+			if err != nil {
+				t.Fatalf("glob backups: %v", err)
+			}
+			if len(backups) != 0 {
+				t.Errorf("init wrote backups %v before refusing, want none", backups)
+			}
+		})
+	}
+}
+
+// TestRunDoctor_FixDoesNotPrintAResolvedIdentityDriftAsOpen has a
+// repository whose profile email only reaches it once the missing include
+// file is rendered. "--fix" renders it, so the drift it caused is gone and
+// must not be listed after the fix, while a drift the render cannot
+// resolve, a global key after the include, still is, with the exit status
+// to match.
+func TestRunDoctor_FixDoesNotPrintAResolvedIdentityDriftAsOpen(t *testing.T) {
+	tests := []struct {
+		name string
+		// global is the global git configuration, {include} the gitcd
+		// include section.
+		global    string
+		wantDrift bool
+		wantCode  int
+	}{
+		{
+			name:      "no global identity key",
+			global:    "{include}",
+			wantDrift: false,
+			wantCode:  0,
+		},
+		{
+			name:      "a global key before the include",
+			global:    "[user]\n\temail = jane@global.example\n{include}",
+			wantDrift: false,
+			wantCode:  1,
+		},
+		{
+			name:      "a global key after the include",
+			global:    "{include}[user]\n\temail = jane@global.example\n",
+			wantDrift: true,
+			wantCode:  1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := setupEnv(t)
+			root := filepath.Join(home, "Code")
+			writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+`
 profiles:
   work:
-    user.email: acme-work-identity
-defaultProfile: work
+    user.email: jane@acme.example
 rules:
   - host: github.com
     profile: work
 `)
+			repo := filepath.Join(root, "github.com", "acme", "widget")
+			initRepository(t, repo)
+			addRemote(t, repo, "https://github.com/acme/widget.git")
+			include := "[include]\n\tpath = " + gitConfigEscaped(gitconfig.IncludePath(home)) + "\n"
+			writeFile(t, globalConfigPath(home), strings.ReplaceAll(tt.global, "{include}", include))
+
+			var before, beforeErr bytes.Buffer
+			if code := run([]string{"doctor"}, &before, &beforeErr); code != 1 {
+				t.Fatalf("doctor = %d, want 1, stdout: %s stderr: %s", code, before.String(), beforeErr.String())
+			}
+			if !strings.Contains(before.String(), "[identity-drift]") {
+				t.Fatalf("doctor stdout = %q, want an identity drift before the fix", before.String())
+			}
+
+			var stdout, stderr bytes.Buffer
+			code := run([]string{"doctor", "--fix"}, &stdout, &stderr)
+			if code != tt.wantCode {
+				t.Errorf("doctor --fix = %d, want %d, stdout: %s stderr: %s", code, tt.wantCode, stdout.String(), stderr.String())
+			}
+			open := false
+			for _, line := range strings.Split(stdout.String(), "\n") {
+				if strings.HasPrefix(line, "[identity-drift]") {
+					open = true
+				}
+			}
+			if open != tt.wantDrift {
+				t.Errorf("doctor --fix lists the identity drift as open = %v, want %v, stdout: %s", open, tt.wantDrift, stdout.String())
+			}
+			if !strings.Contains(stdout.String(), "fixed [managed-file-missing]") {
+				t.Errorf("doctor --fix stdout = %q, want the missing include file reported as fixed", stdout.String())
+			}
+
+			// The next plain run agrees with what --fix printed.
+			var again, againErr bytes.Buffer
+			if next := run([]string{"doctor"}, &again, &againErr); next != tt.wantCode {
+				t.Errorf("doctor after --fix = %d, want %d, stdout: %s", next, tt.wantCode, again.String())
+			}
+		})
+	}
+}
+
+// outstandingLines returns the finding lines of a doctor text report.
+func outstandingLines(report string) []string {
+	var lines []string
+	for _, line := range strings.Split(report, "\n") {
+		if strings.HasPrefix(line, "[") {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// TestRunDoctor_FixThatFailsPartwayReportsWhatIsStillOpen makes the second
+// managed file unwritable, so "--fix" writes the include file and then
+// fails. What it prints as open, and its exit status, must equal a plain
+// doctor run afterwards.
+func TestRunDoctor_FixThatFailsPartwayReportsWhatIsStillOpen(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+`
+profiles:
+  work:
+    user.email: jane@acme.example
+rules:
+  - host: github.com
+    profile: work
+`)
+	repo := filepath.Join(root, "github.com", "acme", "widget")
+	initRepository(t, repo)
+	addRemote(t, repo, "https://github.com/acme/widget.git")
+	writeFile(t, globalConfigPath(home), "[include]\n\tpath = "+gitConfigEscaped(gitconfig.IncludePath(home))+"\n")
+
+	// The include file sorts before the profile file, so it is written
+	// first. The profile file is a symlink, which the write refuses.
+	profilePath := gitconfig.ProfilePath(home, "work")
+	writeFile(t, filepath.Join(home, "elsewhere.gitconfig"), "# placeholder\n")
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0o755); err != nil {
+		t.Fatalf("create %s: %v", filepath.Dir(profilePath), err)
+	}
+	symlinkOrSkip(t, filepath.Join(home, "elsewhere.gitconfig"), profilePath)
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"doctor"}, &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("doctor = %d, want 1, stderr: %s", code, stderr.String())
+	code := run([]string{"doctor", "--fix"}, &stdout, &stderr)
+	if _, err := os.Stat(gitconfig.IncludePath(home)); err != nil {
+		t.Fatalf("doctor --fix did not write the include file before failing: %v, stderr: %s", err, stderr.String())
 	}
-	out := stdout.String()
-	if !strings.Contains(out, `"work"`) {
-		t.Fatalf(
-			"doctor stdout = %q, want the global identity finding to name the configured default profile %q", out, "work",
-		)
+
+	var again, againErr bytes.Buffer
+	nextCode := run([]string{"doctor"}, &again, &againErr)
+	if code != nextCode {
+		t.Errorf("doctor --fix = %d, want %d as a plain run afterwards, stdout: %s", code, nextCode, stdout.String())
 	}
-	if strings.Contains(out, `"global"`) {
-		t.Fatalf(
-			"doctor stdout = %q, want it to stop naming the hardcoded %q profile once a default profile is configured",
-			out, "global",
-		)
+	got, want := outstandingLines(stdout.String()), outstandingLines(again.String())
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("doctor --fix lists %q as open, want what a plain run lists afterwards: %q", got, want)
+	}
+	if len(want) == 0 {
+		t.Fatalf("plain doctor afterwards lists nothing, want the unwritable profile file reported, stdout: %s", again.String())
+	}
+}
+
+// TestRunDoctor_FixCarriesARepositoryWithoutARemoteAlongWithACaseRename
+// has a mis-cased owner directory that holds a repository with a remote
+// and one without. The case rename moves both, and a repository doctor
+// cannot inspect is no reason to withhold the report or fail the run
+// afterwards: the report is printed, and the exit status equals a plain
+// run afterwards.
+func TestRunDoctor_FixCarriesARepositoryWithoutARemoteAlongWithACaseRename(t *testing.T) {
+	for _, format := range []string{"text", "json"} {
+		t.Run(format, func(t *testing.T) {
+			home := setupEnv(t)
+			root := filepath.Join(home, "src")
+			writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+`
+profiles:
+  work:
+    user.email: jane@acme.example
+rules:
+  - host: github.com
+    profile: work
+`)
+			// The repositories are committed before the global file is
+			// replaced: setupEnv's identity lives in that file, and a commit
+			// without one fails on a machine that cannot guess a name.
+			withRemote := filepath.Join(root, "github.com", "Foo", "gadget")
+			initRepository(t, withRemote)
+			addRemote(t, withRemote, "https://github.com/foo/gadget.git")
+			initRepository(t, filepath.Join(root, "github.com", "Foo", "noremote"))
+			writeFile(t, globalConfigPath(home), "[include]\n\tpath = "+gitConfigEscaped(gitconfig.IncludePath(home))+"\n")
+
+			args := []string{"doctor", "--fix"}
+			if format == "json" {
+				args = append(args, "--json")
+			}
+			var stdout, stderr bytes.Buffer
+			code := run(args, &stdout, &stderr)
+
+			var again, againErr bytes.Buffer
+			nextCode := run([]string{"doctor"}, &again, &againErr)
+			if nextCode != 0 {
+				t.Fatalf("doctor after --fix = %d, want 0, stdout: %s", nextCode, again.String())
+			}
+			if code != nextCode {
+				t.Errorf("doctor %v = %d, want %d as a plain run afterwards, stdout: %s stderr: %s", args[1:], code, nextCode, stdout.String(), stderr.String())
+			}
+			if format == "text" {
+				if !strings.Contains(stdout.String(), "config file:") {
+					t.Errorf("doctor --fix stdout = %q, want the report", stdout.String())
+				}
+				return
+			}
+			dec := json.NewDecoder(&stdout)
+			var out doctorOutput
+			if err := dec.Decode(&out); err != nil {
+				t.Fatalf("doctor --fix --json stdout is not a JSON object: %v", err)
+			}
+			if dec.More() {
+				t.Errorf("doctor --fix --json stdout holds more than one JSON value")
+			}
+		})
+	}
+}
+
+// TestRunDoctor_FixPrintsAScanWarningOnce guards the second pass of
+// "--fix": a repository without an origin remote is skipped with a warning
+// by the first pass, and the re-read after the repair must not print it
+// again.
+func TestRunDoctor_FixPrintsAScanWarningOnce(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+`
+profiles:
+  work:
+    user.email: jane@acme.example
+rules:
+  - host: github.com
+    profile: work
+`)
+	initRepository(t, filepath.Join(root, "local", "scratch"))
+
+	var stdout, stderr bytes.Buffer
+	run([]string{"doctor", "--fix"}, &stdout, &stderr)
+	if !strings.Contains(stdout.String(), "fixed [managed-file-missing]") {
+		t.Fatalf("doctor --fix stdout = %q, want a repaired managed file so a second pass runs", stdout.String())
+	}
+	if got := strings.Count(stderr.String(), "skipped a repository scan could not inspect"); got != 1 {
+		t.Errorf("doctor --fix printed the scan warning %d times, want once, stderr: %s", got, stderr.String())
 	}
 }
 
@@ -675,6 +1017,37 @@ func TestRunDoctor_FixNeverReportsFixedOrExitsZeroForAStillMisplacedTwoSegmentMi
 	out := stdout.String()
 	if strings.Contains(out, "fixed [path-case-mismatch]") {
 		t.Fatalf("doctor --fix stdout = %q, want no \"fixed [path-case-mismatch]\" line: the repository is still misplaced", out)
+	}
+}
+
+// TestRunDoctor_FixNamesTheCurrentPathOfAMismatchItLeavesOutstanding covers
+// a run with nothing but a case rename to repair: the finding that stays
+// open after the first segment moved must name where the repository is
+// now, not where it was before the rename.
+func TestRunDoctor_FixNamesTheCurrentPathOfAMismatchItLeavesOutstanding(t *testing.T) {
+	home := setupEnv(t)
+	root := filepath.Join(home, "Code")
+	writeFile(t, filepath.Join(home, ".gitcd.yaml"), "root: "+root+"\n")
+	misCased := filepath.Join(root, "GitHub.com", "Acme", "widget")
+	initRepository(t, misCased)
+	addRemote(t, misCased, "https://github.com/acme/widget.git")
+	// Render the managed files first, so the case rename is the only repair
+	// "--fix" has left to make.
+	var applyOut, applyErr bytes.Buffer
+	if code := run([]string{"apply"}, &applyOut, &applyErr); code != 0 {
+		t.Fatalf("apply = %d, stdout: %s stderr: %s", code, applyOut.String(), applyErr.String())
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"doctor", "--fix"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("doctor --fix = %d, want 1, stdout: %s stderr: %s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String(), "fixed [managed-file") {
+		t.Fatalf("doctor --fix stdout = %q, want no managed file repair in this run", stdout.String())
+	}
+	now := filepath.Join(root, "github.com", "Acme", "widget")
+	if !strings.Contains(stdout.String(), "on disk at "+now+",") {
+		t.Errorf("doctor --fix stdout = %q, want the open finding to name the current path %s", stdout.String(), now)
 	}
 }
 
