@@ -201,7 +201,7 @@ func collectFindings(ctx context.Context, cfg config.Config, home string, logger
 	}
 	movedProfileTarget := movedProfileTargetName(cfg)
 	_, movedProfileExists := cfg.Profiles[movedProfileTarget]
-	globalFindings, err := doctor.CheckGlobal(globalContent, globalPath, movedProfileTarget, movedProfileExists)
+	globalFindings, err := doctor.CheckGlobal(globalContent, globalPath, gitconfig.IncludePath(home), movedProfileTarget, movedProfileExists)
 	if err != nil {
 		return nil, err
 	}

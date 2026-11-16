@@ -76,9 +76,10 @@ func writeBackup(path string, content []byte) error {
 // described below, it first detects every identity key the global git
 // configuration sets directly: "user.useConfigOnly" only stops git from
 // guessing a default identity, it never suppresses a value that is
-// already configured, so a key sitting anywhere in this file, matched by
-// gitcd's own includeIf chain or not, defeats the refusal every profile's
-// "useConfigOnly" is meant to provide for a repository no rule matches.
+// already configured, so a key in this file defeats the refusal every
+// profile's "useConfigOnly" is meant to provide for a repository no
+// profile reaches. Git takes the last value, so a profile that sets the
+// same key still wins while the include sits after the key.
 // "init" reports every such key, names the profile it would belong in,
 // and, only when asked, moves it there and removes it from the global
 // file, with a backup of both files it touches.
@@ -166,7 +167,12 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	if found := git.FindGlobalIdentityValues(content, git.IdentityKeys); len(found) > 0 {
-		reportGlobalIdentityKeys(stdout, globalPath, found, target)
+		after, err := git.IdentityKeysAfterGitcdInclude(content, git.IdentityKeys, includePath)
+		if err != nil {
+			fmt.Fprintf(stderr, "gitcd init: %v\n", err)
+			return 1
+		}
+		reportGlobalIdentityKeys(stdout, globalPath, found, after, target)
 
 		move := decideMove(*moveIdentity, stdin, stderr, found, target)
 		if move {
@@ -265,15 +271,36 @@ func alreadyIncluded(content []byte, includePath string) bool {
 // profile it would belong in, to stdout: the acceptance this command's
 // detection side exists for is naming them, regardless of whether a move
 // follows.
-func reportGlobalIdentityKeys(stdout io.Writer, globalPath string, found []git.GlobalIdentityValue, target string) {
+//
+// Git takes the last value, so what the text says depends on where a key
+// sits: after is the subset of found that sits after an include section.
+// Such a key wins over every profile the include loads. Any other key
+// loses to a profile that sets it, once the gitcd include sits after it.
+func reportGlobalIdentityKeys(stdout io.Writer, globalPath string, found []git.GlobalIdentityValue, after []string, target string) {
 	fmt.Fprintf(stdout, "%s sets %s directly, outside any profile:\n", globalPath, describeIdentityKeys(found))
 	for _, v := range found {
 		fmt.Fprintf(stdout, "  %s = %s\n", v.Key, v.Value)
 	}
-	fmt.Fprintln(stdout, `"user.useConfigOnly" only stops git from guessing a default identity; it does`)
-	fmt.Fprintln(stdout, "not suppress a value already configured here, so every repository gitcd")
-	fmt.Fprintln(stdout, "manages, including one no rule matches, still gets an identity from this file.")
-	fmt.Fprintf(stdout, "They belong in profile %q instead.\n", target)
+	isAfter := make(map[string]bool, len(after))
+	for _, k := range after {
+		isAfter[k] = true
+	}
+	var before []string
+	for _, v := range found {
+		if !isAfter[v.Key] {
+			before = append(before, v.Key)
+		}
+	}
+	fmt.Fprintln(stdout, `"user.useConfigOnly" does not suppress a value configured here. Git takes the last value it reads.`)
+	if len(before) > 0 {
+		fmt.Fprintf(stdout, "Not after an include section: %s. A profile that sets such a key wins when the gitcd include sits after it.\n", strings.Join(before, ", "))
+		fmt.Fprintln(stdout, "Such a key still applies to a repository no profile reaches, or where no profile sets it.")
+	}
+	if len(after) > 0 {
+		fmt.Fprintf(stdout, "After an include section: %s. Such a key wins over every profile.\n", strings.Join(after, ", "))
+	}
+	fmt.Fprintln(stdout, "A repository's own configuration beats the global file and every profile.")
+	fmt.Fprintf(stdout, "They belong in a profile, not in this file. A move targets profile %q.\n", target)
 }
 
 // describeIdentityKeys joins found's key names for a one line message.
