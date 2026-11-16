@@ -33,7 +33,8 @@ not repeated here.
 - `internal/shell/`: the per shell init snippet `shell-init` prints, including the `cd` tab
   completion registered for zsh and fish.
 - `scripts/`: CI glue specific to this repository's own workflows, such as attaching and
-  publishing release assets after `release.yaml` drafts a release.
+  publishing release assets after `release.yaml` drafts a release, and pushing the Homebrew
+  formula to the tap once the release is public.
 
 Whether a linked worktree counts as one of the repositories a command reports is a single,
 stated rule, not a separate choice per command: `cmd/gitcd/repos.go`'s `scanRepositories` doc
@@ -101,6 +102,12 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   local Task target. The shared workflow runs Renovate through npm and needs the network, so a
   local copy would add a second pin to keep in step. Only CI validates `renovate.json`.
 
+- `.goreleaser.yaml` uses the deprecated `brews` key, a formula instead of a cask, so
+  `goreleaser check` exits 2. `task lint:goreleaser` accepts that exit only when the `brews`
+  notice is the sole deprecation. Facts and the revisit trigger: `docs/adr/0003-homebrew-formula-not-cask.md`.
+  The release verifies the generated formula against a skeleton stored in
+  `scripts/check-homebrew-formula.sh`. `task test:formula` runs that check on a snapshot build,
+  so a change to the `brews` entry fails there until the skeleton is updated with it.
 - yamllint's line-length limit is 140, not the default 120. A pinned reusable workflow
   reference needs the full line for its commit digest and version comment. Most of the
   organisation's repositories already run at 140.
@@ -108,4 +115,9 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   stays in this repository instead of the shared scripts repository: a release path must not
   fetch a script from another repository at release time, where a failure burns a version
   number permanently. Keep it in step with release-me's copy; a third consumer moves it to the
-  shared repository.
+  shared repository. This copy differs on purpose: it also uploads the Homebrew formula
+  goreleaser renders, verifies the cosign bundle of the checksums against the identity of
+  `release.yaml` on `main` before it uploads anything (`docs/adr/0004-keyless-signing.md`), and
+  hands each tag's formula sha256 to the
+  `homebrew` job as the `formula-hashes` step output. release-me's copy does none of these, so
+  a port in either direction must keep or drop those parts deliberately.

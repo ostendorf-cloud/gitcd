@@ -5,6 +5,20 @@ on:
     branches: [main]
   pull_request:
     types: [labeled, unlabeled]
+  # Pushes the formula of an already published release to the tap, for when
+  # the run that released it is gone. Runs the homebrew job alone, from the
+  # default branch. See docs/install.md.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag to push the formula for, such as v1.2.3
+        required: true
+        type: string
+      allow-downgrade:
+        description: Let a tag older than the tap's formula replace it
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -18,6 +32,14 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # cosign signs the checksums keyless with this run's OIDC token, see
+      # docs/adr/0004-keyless-signing.md. Only this job gets it.
+      id-token: write
+    # The tags this run released and the sha256 of the formula built for each,
+    # for the homebrew job below. Empty when nothing was released.
+    outputs:
+      tags: ${{ steps.release-me.outputs.tags }}
+      formula-hashes: ${{ steps.publish.outputs.formula-hashes }}
     # The label list is release-me.yaml's defaults, spelled out: the condition
     # cannot read the configuration.
     if: >-
@@ -57,13 +79,91 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           app-slug: ${{ steps.app-token.outputs.app-slug }}
 
+      # Only the tools the publish script runs: this job holds the OIDC
+      # token, so it installs nothing else from mise.toml.
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785  # v5.2.8
         if: steps.release-me.outputs.tags != ''
+        with:
+          install_args: go goreleaser cosign
 
       - name: Build, attach and publish the assets for every tag just released
+        id: publish
         if: steps.release-me.outputs.tags != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           TAGS: ${{ steps.release-me.outputs.tags }}
         run: ./scripts/publish-release-assets.sh
+
+  # Pushes the Homebrew formula to the tap, after the release job published
+  # the assets its URLs point at. Its own job, so a failed push shows as a
+  # red run and "Re-run failed jobs" repeats this job alone: the release job
+  # is not run again, its outputs are kept. Never "Re-run all jobs": release-me
+  # then finds nothing left to release, tags is empty and this job is skipped.
+  # The formula comes from the release itself (see
+  # scripts/publish-homebrew-formula.sh) and is verified against the hash the
+  # release job recorded, so a rerun never rebuilds the archives. See
+  # docs/adr/0003-homebrew-formula-not-cask.md.
+  #
+  # always() keeps the job running when the release job failed or was
+  # cancelled after it published: the job then still pushes what was
+  # published, and ends red through its last step either way. A manual run
+  # (workflow_dispatch) skips the release job and verifies the formula against
+  # the release's checksums file instead, from the default branch only.
+  homebrew:
+    needs: release
+    # A cancelled run still starts this job. That is deliberate, for a run
+    # cancelled after the release was published. The script refuses a release
+    # that is still a draft.
+    if: >-
+      always() && (
+      (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event_name != 'workflow_dispatch' && needs.release.outputs.tags != ''))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.sha }}
+
+      # Scoped to the tap alone and to contents: write, the one permission a
+      # file commit needs. Minted here, in the one job that needs it, and
+      # revoked when the job ends.
+      - name: Mint a token for the tap
+        id: tap-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with:
+          app-id: ${{ vars.GH_APP_RELEASE_APP_ID }}
+          private-key: ${{ secrets.GH_APP_RELEASE_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: homebrew-tap
+          permission-contents: write
+
+      - name: Push the formula to the tap
+        env:
+          # Reads this repository's published release, nothing else.
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
+          TAGS: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.release.outputs.tags }}
+          FORMULA_HASHES: ${{ needs.release.outputs.formula-hashes }}
+          VERIFY_MODE: ${{ github.event_name == 'workflow_dispatch' && 'checksums' || 'hash' }}
+          ALLOW_DOWNGRADE: ${{ github.event_name == 'workflow_dispatch' && inputs.allow-downgrade || 'false' }}
+        run: ./scripts/publish-homebrew-formula.sh
+
+      # A release job that failed or was cancelled leaves this job red even
+      # when the formula was pushed, so the run is not mistaken for a good one.
+      - name: Fail when the release job did not succeed
+        if: always() && github.event_name != 'workflow_dispatch' && needs.release.result != 'success'
+        env:
+          RELEASE_RESULT: ${{ needs.release.result }}
+        run: |
+          {
+            echo "the release job ended as ${RELEASE_RESULT}: check that the release is complete."
+            echo "If the formula is not in the tap, do not rely on Re-run failed jobs: it reruns the release job too,"
+            echo "which then finds nothing to release and skips this job. Use the manual run (workflow_dispatch) with the tag."
+          } >&2
+          exit 1

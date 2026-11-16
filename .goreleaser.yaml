@@ -29,6 +29,45 @@ archives:
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
 
+# Keyless signature of the checksums file, see
+# docs/adr/0004-keyless-signing.md. cosign takes the OIDC token of the
+# workflow run, so the release job needs id-token: write. The bundle holds
+# the signature, the certificate and the transparency log entry. A snapshot
+# or local build skips it with --skip=sign.
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+
+# A formula, not a cask: see docs/adr/0003-homebrew-formula-not-cask.md.
+# skip_upload is always on: goreleaser only renders the file into
+# dist/homebrew/Formula/, with the URLs and checksums of this very build.
+# release.yaml's own homebrew job pushes it to the tap with a token scoped
+# to the tap, after the assets are public. goreleaser itself never holds a
+# tap token.
+brews:
+  - name: gitcd
+    directory: Formula
+    homepage: https://github.com/ostendorf-cloud/gitcd
+    description: Clone repositories into a predictable layout and apply a git identity profile per remote
+    license: Apache-2.0
+    skip_upload: true
+    repository:
+      owner: ostendorf-cloud
+      name: homebrew-tap
+      branch: main
+    # The git identity features shell out to git, so the formula installs it.
+    dependencies:
+      - name: git
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/gitcd version")
+
 # No release section: release.yaml always runs this with --skip=publish,
 # since goreleaser's own GitHub release handling cannot see the draft
 # release release-me already created for the tag (GitHub's "get a release
