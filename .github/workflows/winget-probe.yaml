@@ -1,0 +1,249 @@
+name: winget-probe
+
+# THROWAWAY probe for issue 88. Never merged. It records whether a hosted
+# Windows runner can validate and install the winget manifest of a published
+# release, as the runner user and as a standard user. Read-only: no token, no
+# secret, no write to any repository.
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/winget-probe.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: probe (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-2025]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Probe winget
+        env:
+          IMAGE: ${{ matrix.os }}
+        run: |
+          # Every probe runs. A failure is recorded, never thrown. The job
+          # always exits 0: the result is the summary table.
+          $ErrorActionPreference = 'Continue'
+          $base = 'https://github.com/ostendorf-cloud/gitcd/releases/download/v0.1.0'
+          $dir = 'C:\probe'
+          $manifest = Join-Path $dir 'manifest'
+          $results = [System.Collections.Generic.List[object]]::new()
+
+          function Add-Result([string]$Name, [string]$Status, [string]$Detail = '') {
+            $results.Add([pscustomobject]@{ Name = $Name; Status = $Status; Detail = $Detail })
+            Write-Host "RESULT: $Status  $Name  $Detail"
+          }
+          function Test-Elevated {
+            $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+            ([Security.Principal.WindowsPrincipal]::new($id)).IsInRole(
+              [Security.Principal.WindowsBuiltInRole]::Administrator)
+          }
+          # Run a native command, print its output and exit code, record it.
+          function Invoke-Native([string]$Name, [scriptblock]$Cmd, [int[]]$Pass = @(0)) {
+            Write-Host "::group::$Name"
+            $out = ''; $code = -1
+            try { $out = (& $Cmd 2>&1 | Out-String); $code = $LASTEXITCODE }
+            catch { $out = ($_ | Out-String) }
+            Write-Host $out
+            Write-Host "exit code: $code"
+            Write-Host '::endgroup::'
+            $status = if ($Pass -contains $code) { 'PASS' } else { 'FAIL' }
+            Add-Result $Name $status "exit $code"
+          }
+          # Machine and user PATH from the registry, plus the winget links folders.
+          function Update-ProbePath {
+            $m = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+            $u = [Environment]::GetEnvironmentVariable('Path', 'User')
+            $env:Path = "$m;$u;$env:LOCALAPPDATA\Microsoft\WinGet\Links;" +
+              "$env:ProgramFiles\WinGet\Links;$env:LOCALAPPDATA\Microsoft\WindowsApps"
+          }
+
+          # (1) Environment.
+          Write-Host '::group::1 environment'
+          Write-Host "image label: $env:IMAGE"
+          Write-Host "os: $([Environment]::OSVersion.VersionString)"
+          (Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber) | Format-List | Out-String | Write-Host
+          Write-Host "powershell: $($PSVersionTable.PSVersion)"
+          Write-Host "user: $([Environment]::UserDomainName)\$([Environment]::UserName)"
+          $elevated = Test-Elevated
+          Write-Host "elevated: $elevated"
+          Write-Host '::endgroup::'
+          Add-Result '1 session elevated' 'INFO' "$elevated"
+          $found = [bool](Get-Command winget -ErrorAction SilentlyContinue)
+          Add-Result '1 winget command exists' $(if ($found) { 'PASS' } else { 'FAIL' })
+          if ($found) { Invoke-Native '1 winget --version' { winget --version } }
+
+          # (2) winget missing: try the WinGet client module.
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Write-Host '::group::2 repair winget'
+            try {
+              Install-PackageProvider -Name NuGet -Force -Scope CurrentUser | Out-Null
+              Install-Module Microsoft.WinGet.Client -Force -Scope CurrentUser -Repository PSGallery
+              Import-Module Microsoft.WinGet.Client
+              Repair-WinGetPackageManager -Latest -Force
+            } catch { Write-Host "repair (current user) failed: $_" }
+            Update-ProbePath
+            if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+              try { Repair-WinGetPackageManager -AllUsers -Latest -Force }
+              catch { Write-Host "repair (all users) failed: $_" }
+              Update-ProbePath
+            }
+            Write-Host '::endgroup::'
+            $found = [bool](Get-Command winget -ErrorAction SilentlyContinue)
+            Add-Result '2 winget works after repair' $(if ($found) { 'PASS' } else { 'FAIL' })
+            if ($found) { Invoke-Native '2 winget --version' { winget --version } }
+          } else { Add-Result '2 repair' 'SKIP' 'winget already present' }
+
+          # (3) Download the manifest set and the checksums file of v0.1.0.
+          New-Item -ItemType Directory -Force -Path $manifest | Out-Null
+          $files = 'OstendorfCloud.gitcd.yaml', 'OstendorfCloud.gitcd.installer.yaml',
+            'OstendorfCloud.gitcd.locale.en-US.yaml', 'gitcd_0.1.0_checksums.txt'
+          Write-Host '::group::3 download'
+          foreach ($f in $files) {
+            try {
+              Invoke-WebRequest -UseBasicParsing -Uri "$base/$f" -OutFile (Join-Path $manifest $f)
+              Add-Result "3 download $f" 'PASS' "$((Get-Item (Join-Path $manifest $f)).Length) bytes"
+            } catch { Add-Result "3 download $f" 'FAIL' "$_" }
+          }
+          Write-Host '::endgroup::'
+
+          # (4) Validate the manifest.
+          Invoke-Native '4 winget validate --manifest' { winget validate --manifest $manifest }
+
+          # (5) Install from the local manifest as the runner user.
+          Invoke-Native '5a winget settings --enable LocalManifestFiles' { winget settings --enable LocalManifestFiles }
+          Invoke-Native '5b winget install --manifest' {
+            winget install --manifest $manifest --accept-source-agreements `
+              --accept-package-agreements --disable-interactivity
+          }
+
+          # (6) Run gitcd. The exit codes are recorded, none is judged.
+          Update-ProbePath
+          Write-Host '::group::6 gitcd'
+          Write-Host "gitcd resolves to: $((Get-Command gitcd -ErrorAction SilentlyContinue).Source)"
+          Write-Host '::endgroup::'
+          foreach ($a in @(@(), @('version'), @('--version'), @('--help'))) {
+            $label = "6 gitcd $($a -join ' ')".Trim()
+            Write-Host "::group::$label"
+            $out = ''; $code = -1
+            try { $out = (& gitcd @a 2>&1 | Out-String); $code = $LASTEXITCODE } catch { $out = "$_" }
+            Write-Host $out
+            Write-Host "exit code: $code"
+            Write-Host '::endgroup::'
+            Add-Result $label 'INFO' "exit $code"
+          }
+
+          # (9) Nested portable zip install: what did it leave behind? Runs
+          # before the uninstall so the files still exist.
+          Write-Host '::group::9 install layout'
+          foreach ($p in "$env:LOCALAPPDATA\Microsoft\WinGet\Packages", "$env:LOCALAPPDATA\Microsoft\WinGet\Links",
+              "$env:ProgramFiles\WinGet\Packages", "$env:ProgramFiles\WinGet\Links") {
+            Write-Host "--- $p"
+            if (Test-Path $p) {
+              Get-ChildItem $p -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match 'gitcd' } |
+                Select-Object FullName, Length, LinkType, Target | Format-List | Out-String | Write-Host
+            } else { Write-Host 'missing' }
+          }
+          Write-Host '::endgroup::'
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet", "$env:ProgramFiles\WinGet" -Recurse `
+            -Filter 'gitcd.exe' -ErrorAction SilentlyContinue
+          Add-Result '9 gitcd.exe present' $(if ($exe) { 'PASS' } else { 'FAIL' }) "$(($exe.FullName) -join '; ')"
+
+          # (7) Uninstall by id. Then reinstall and uninstall by manifest to
+          # learn whether that form works too.
+          Invoke-Native '7a winget uninstall --id' {
+            winget uninstall --id OstendorfCloud.gitcd --exact --disable-interactivity
+          }
+          Invoke-Native '7b reinstall for the manifest uninstall' {
+            winget install --manifest $manifest --accept-source-agreements `
+              --accept-package-agreements --disable-interactivity
+          }
+          Invoke-Native '7c winget uninstall --manifest' {
+            winget uninstall --manifest $manifest --disable-interactivity
+          }
+          Invoke-Native '7d winget uninstall --id (cleanup)' {
+            winget uninstall --id OstendorfCloud.gitcd --exact --disable-interactivity
+          } -Pass @(0, -1978335212)
+
+          # (8) Install as a non elevated user on this elevated runner.
+          # The runner user is an administrator with UAC off, so a limited
+          # token is not available by a documented switch. Two candidates:
+          #   a) a throwaway local standard user and Start-Process -Credential
+          #   b) a scheduled task with RunLevel Limited (S4U, no password)
+          # Both are built in. A random password lives in memory only. Nothing
+          # third party is installed. The VM is discarded after the job.
+          Write-Host '::group::8 non elevated install'
+          $child = Join-Path $dir 'child.ps1'
+          Set-Content -Path $child -Encoding utf8 -Value @(
+            'param($Manifest, $Out)'
+            '$ErrorActionPreference = ''Continue'''
+            '& {'
+            '  "user: $env:USERDOMAIN\$env:USERNAME"'
+            '  $id = [Security.Principal.WindowsIdentity]::GetCurrent()'
+            '  $role = [Security.Principal.WindowsBuiltInRole]::Administrator'
+            '  "elevated: " + ([Security.Principal.WindowsPrincipal]::new($id)).IsInRole($role)'
+            '  "winget: " + (Get-Command winget -ErrorAction SilentlyContinue).Source'
+            '  winget --version'
+            '  winget install --manifest $Manifest --accept-source-agreements --accept-package-agreements --disable-interactivity'
+            '  "CHILD_INSTALL_EXIT=$LASTEXITCODE"'
+            '} *>&1 | Out-File -FilePath $Out -Encoding utf8'
+          )
+          icacls $dir /grant 'Users:(OI)(CI)M' | Out-Null
+
+          # 8a: local standard user.
+          $outA = Join-Path $dir 'child-user.txt'
+          $pw = 'Aa1!' + [guid]::NewGuid().ToString('N')
+          try {
+            $sec = ConvertTo-SecureString $pw -AsPlainText -Force
+            New-LocalUser -Name probeuser -Password $sec -AccountNeverExpires | Out-Null
+            Add-LocalGroupMember -Group Users -Member probeuser
+            $cred = [pscredential]::new("$env:COMPUTERNAME\probeuser", $sec)
+            $p = Start-Process powershell.exe -Credential $cred -LoadUserProfile -Wait -PassThru `
+              -WorkingDirectory $dir -WindowStyle Hidden `
+              -ArgumentList '-NoProfile', '-File', $child, '-Manifest', $manifest, '-Out', $outA
+            Write-Host "8a child process exit: $($p.ExitCode)"
+          } catch { Write-Host "8a failed: $_" }
+          if (Test-Path $outA) { Get-Content $outA | Write-Host }
+          $okA = (Test-Path $outA) -and ((Get-Content $outA -Raw) -match 'CHILD_INSTALL_EXIT=0')
+          Add-Result '8a install as local standard user' $(if ($okA) { 'PASS' } else { 'FAIL' }) 'see log group 8'
+          try { Remove-LocalUser -Name probeuser } catch { Write-Host "cleanup: $_" }
+
+          # 8b: scheduled task with a limited token, as the runner user.
+          $outB = Join-Path $dir 'child-task.txt'
+          try {
+            $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument (
+              "-NoProfile -File `"$child`" -Manifest `"$manifest`" -Out `"$outB`"")
+            $prin = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
+            Register-ScheduledTask -TaskName ProbeLimited -Action $act -Principal $prin | Out-Null
+            Start-ScheduledTask -TaskName ProbeLimited
+            $t = 0
+            while ($t -lt 180 -and (Get-ScheduledTask -TaskName ProbeLimited).State -ne 'Ready') { Start-Sleep 3; $t += 3 }
+            Unregister-ScheduledTask -TaskName ProbeLimited -Confirm:$false
+          } catch { Write-Host "8b failed: $_" }
+          if (Test-Path $outB) { Get-Content $outB | Write-Host }
+          $okB = (Test-Path $outB) -and ((Get-Content $outB -Raw) -match 'CHILD_INSTALL_EXIT=0')
+          $nonElev = (Test-Path $outB) -and ((Get-Content $outB -Raw) -match 'elevated: False')
+          Add-Result '8b install in scheduled task' $(if ($okB) { 'PASS' } else { 'FAIL' }) "token not elevated: $nonElev"
+          Write-Host '::endgroup::'
+          # No other way was looked for or invented: runas needs a password,
+          # psexec is third party.
+
+          # Summary.
+          $md = @("## winget probe: $env:IMAGE", '', '| Probe | Status | Detail |', '| --- | --- | --- |')
+          foreach ($r in $results) { $md += "| $($r.Name) | $($r.Status) | $($r.Detail -replace '\|', '/') |" }
+          $md | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          $md | Write-Host
+          exit 0
