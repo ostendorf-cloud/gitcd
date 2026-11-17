@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   renovate:
-    uses: ostendorf-cloud/workflows/.github/workflows/reusable-renovate.yaml@a798b963d20b239bec48c101af965e08fac36146  # v0.3.0
+    uses: ostendorf-cloud/workflows/.github/workflows/reusable-renovate.yaml@v0
     # The one secret the reusable workflow declares. The app id is a variable and needs no
     # forwarding.
     secrets:

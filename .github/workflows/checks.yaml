@@ -134,7 +134,7 @@ jobs:
   # (agent worktrees), .git/, bin/ and dist/ (build output). Keep this find
   # in step with the one in Taskfile.yaml.
   license:
-    uses: ostendorf-cloud/workflows/.github/workflows/reusable-license.yaml@a798b963d20b239bec48c101af965e08fac36146  # v0.3.0
+    uses: ostendorf-cloud/workflows/.github/workflows/reusable-license.yaml@v0
     with:
       copyright-holder: Simon Ostendorf
       year: "2026"
@@ -155,7 +155,7 @@ jobs:
   # Validates renovate.json through the shared reusable workflow, which pins
   # Renovate itself. There is no local Task target, see AGENTS.md.
   renovate-config:
-    uses: ostendorf-cloud/workflows/.github/workflows/reusable-renovate-config.yaml@a798b963d20b239bec48c101af965e08fac36146  # v0.3.0
+    uses: ostendorf-cloud/workflows/.github/workflows/reusable-renovate-config.yaml@v0
 
   gitleaks:
     runs-on: ubuntu-latest
