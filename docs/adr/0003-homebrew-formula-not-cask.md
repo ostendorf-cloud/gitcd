@@ -9,8 +9,8 @@ Status: accepted
   instead." (<https://goreleaser.com/customization/homebrew_formulas/>). The deprecations page
   heads the entry "since v2.10 (soft) since v2.16" (<https://goreleaser.com/deprecations/>),
   read as soft since v2.10 and a hard deprecation since v2.16. What the second marker changes
-  was not checked further. `mise.toml` pins `goreleaser = "2"`, which resolves to 2.18.3 today.
-  That version prints the notice and `goreleaser check` exits 2 for it.
+  was not checked further. `mise.toml` pins `goreleaser = "2.20.2"`.
+  2.18.3 and that version print the notice and `goreleaser check` exits 2 for it.
 - GoReleaser's own deprecation text says formulas were only needed "for Linuxbrew at the time",
   which is "no longer true". The `homebrew_casks` page never mentions Linux
   (<https://goreleaser.com/customization/homebrew_casks/>).
@@ -44,6 +44,36 @@ gitcd publishes a Homebrew formula (`brews`) to `ostendorf-cloud/homebrew-tap`, 
   and `task lint:goreleaser` fails visibly.
 - The formula depends on `git` (`depends_on "git"`), since the commands that touch repositories
   shell out to it. The formula's own `test do` block only runs `gitcd version` and does not need git.
+- The tap runs `brew audit --strict` on every formula. The `desc` stays under 80 characters for
+  it. GoReleaser 2.18.3 and 2.20.2 render `version "..."` unconditionally
+  (`internal/pipe/brew/templates/formula.rb`) and have no option to omit
+  it, while Homebrew scans the same version from the
+  `releases/download/v<version>/` URL and reports `version is redundant with version scanned
+  from URL` (`audit_version` in Homebrew's `resource_auditor.rb`).
+- The release therefore removes that one line after goreleaser rendered it, with
+  `scripts/strip-formula-version.sh`, an explicit and tested step instead of a goreleaser
+  option. It runs before the formula is hashed, uploaded, verified and pushed, and
+  `task test:formula` runs it on the snapshot, so the skeleton in
+  `scripts/check-homebrew-formula.sh` has no version line. The step refuses, with the file
+  untouched, unless exactly one version line (two spaces of indent) exists and every `url` is a
+  `https://github.com/<owner>/<repo>/releases/download/v<major>.<minor>.<patch>/<archive>.tar.gz`
+  with the same version, which the line equals or extends with a snapshot suffix. That is the
+  shape Homebrew's "GitHub releases" version parser reads, so the installed version stays the
+  one the line declared. The homebrew job reads the version from the URLs, and from a version
+  line in the tap's older formula, for its downgrade guard.
+- Only a plain `vMAJOR.MINOR.PATCH` tag is stripped. For a tag with a pre-release or build part
+  (`v0.2.0-rc.1`), Homebrew scans another version out of the URL than the line declares (`64`
+  for that URL), so removing the line would change what the formula installs. Such a release
+  keeps its formula as rendered, version line included, and publishes as before. The formula is
+  never pushed: the homebrew job skips a pre-release and refuses, before any download, a tag
+  with a build part that is not flagged as one (`v1.0.0+build-1`).
+- A `formula-audit` job in `checks.yaml` runs `brew audit --strict` and `brew style` on the
+  stripped snapshot formula in a scratch tap on `ubuntu-latest` and `macos-latest`, like the
+  tap's own `lint-formula` (`task lint:formula-audit`, CI only), so a rejection by the tap
+  shows before a release.
+- A manual re-push (`workflow_dispatch`) of `v0.1.0` cannot work from the new `main`: that
+  release's formula asset still has its version line, which the skeleton refuses. The tap
+  already holds `v0.1.0`.
 - Revisit when the binary is signed and notarised: that removes the main reason against a
   cask. Moving is a new ADR, a `homebrew_casks` entry and deleting `Formula/gitcd.rb` from the tap.
 - Issue 44 signs the checksums file with cosign, not the binary (ADR 0004). Whether that changes

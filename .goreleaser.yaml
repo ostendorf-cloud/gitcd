@@ -55,7 +55,8 @@ brews:
   - name: gitcd
     directory: Formula
     homepage: https://github.com/ostendorf-cloud/gitcd
-    description: Clone repositories into a predictable layout and apply a git identity profile per remote
+    # Under 80 characters: brew audit --strict rejects a longer desc.
+    description: Clone repositories into a predictable layout and set a git identity per remote
     license: Apache-2.0
     skip_upload: true
     repository:

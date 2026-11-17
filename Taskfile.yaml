@@ -113,6 +113,8 @@ tasks:
       - scripts/publish-release-assets_test.sh
       - scripts/check-goreleaser-output_test.sh
       - scripts/check-homebrew-formula_test.sh
+      - scripts/strip-formula-version_test.sh
+      - scripts/audit-formula_test.sh
       - scripts/publish-homebrew-formula_test.sh
       - scripts/check-winget-manifest_test.sh
 
@@ -141,6 +143,10 @@ tasks:
       - |
         f=dist/homebrew/Formula/gitcd.rb
         test -s "$f"
+        # The release strips goreleaser's redundant version line right after
+        # the build, see scripts/strip-formula-version.sh. The snapshot does
+        # the same, so every check below sees what a release publishes.
+        scripts/strip-formula-version.sh "$f"
         for p in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
           grep -qE "releases/download/[^/]+/gitcd_${p}\.tar\.gz" "$f" || { echo "formula has no URL for ${p}" >&2; exit 1; }
           sum="$(grep "gitcd_${p}.tar.gz" dist/gitcd_*_checksums.txt | cut -d' ' -f1)"
@@ -152,6 +158,16 @@ tasks:
         # check expects, so a change to the brews entry updates both.
         tag="$(grep -m1 -oE 'releases/download/[^/]+' "$f" | cut -d/ -f3)"
         scripts/check-homebrew-formula.sh "$f" "$tag"
+
+  # CI only: not part of "check", because it needs Homebrew and taps a scratch
+  # tap named gitcd-ci/audit for the duration of the run, like the tap
+  # repository's own lint:formula. It audits the formula test:formula renders
+  # and strips, so a release cannot publish what the tap's audit would reject.
+  lint:formula-audit:
+    desc: brew audit --strict and brew style on the snapshot formula
+    cmds:
+      - task: test:formula
+      - scripts/audit-formula.sh dist/homebrew/Formula/gitcd.rb
 
   check:
     desc: Every check, one after another

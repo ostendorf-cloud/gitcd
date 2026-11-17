@@ -54,7 +54,8 @@ task run -- clone github.com/acme/widget   # run the CLI from source
 ```
 
 - One task target per check and one CI job per target. `check` aggregates them and holds no
-  command of its own. CI calls the small targets, never `check`.
+  command of its own. CI calls the small targets, never `check`. `lint:formula-audit` is the
+  one target outside `check`, see Deviations.
 - Supported systems: Linux, macOS and Windows. The `test` job in `checks.yaml` runs
   `task test:go` on all three. Every other job runs on Linux only.
 - Two license checks, both in `check`:
@@ -109,7 +110,17 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   notice is the sole deprecation. Facts and the revisit trigger: `docs/adr/0003-homebrew-formula-not-cask.md`.
   The release verifies the generated formula against a skeleton stored in
   `scripts/check-homebrew-formula.sh`. `task test:formula` runs that check on a snapshot build,
-  so a change to the `brews` entry fails there until the skeleton is updated with it.
+  so a change to the `brews` entry fails there until the skeleton is updated with it. The
+  skeleton has no `version` line: goreleaser always writes one and Homebrew's audit flags it as
+  redundant, so `scripts/strip-formula-version.sh` removes it right after the build, in
+  `publish-release-assets.sh` before the formula is hashed and in `task test:formula`. It
+  refuses unless the URLs carry the same version. Only a plain `vMAJOR.MINOR.PATCH` tag is
+  stripped: the formula of a pre-release keeps its version line as rendered and is never
+  pushed, the homebrew job skips it.
+- `task lint:formula-audit` and the `formula-audit` job in `checks.yaml` run `brew audit
+  --strict` and `brew style` on that snapshot formula through `scripts/audit-formula.sh`, in a
+  scratch tap, on Linux and macOS runners. It needs Homebrew, so it is CI only and not part of
+  `check`, like the tap repository's own `lint:formula`.
 - The `winget` entry of `.goreleaser.yaml` only renders the manifest (`skip_upload: true`), and
   the owner submits it to `microsoft/winget-pkgs` by hand, so no token for that repository
   exists in the pipeline (`docs/adr/0005-winget-manifest-semi-automatic.md`). The release
