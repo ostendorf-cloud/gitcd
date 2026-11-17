@@ -110,7 +110,7 @@ stderr. `--verbose` enables debug logging. `--dry-run` previews a command that w
 | `doctor` | Reports identity and layout drift. `--fix` repairs what is mechanical. |
 | `adopt <path>` | Moves an existing clone into the layout. |
 | `shell-init <shell>` | Prints the shell integration snippet. |
-| `version` | Prints the version. |
+| `version` | Prints the version. `gitcd --version` does the same. |
 
 Flags, exit codes and examples for each command: [docs/commands.md](docs/commands.md).
 
