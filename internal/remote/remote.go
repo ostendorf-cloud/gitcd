@@ -133,12 +133,17 @@ func (r Remote) URL(protocol string) (string, error) {
 	switch protocol {
 	case "ssh":
 		if r.Project != "" {
-			return fmt.Sprintf("git@%s:v3/%s/%s/%s", azureSSHHost, r.Owner, r.Project, r.Repo), nil
+			// Percent encoded like the HTTPS form. Whether the SSH endpoint
+			// also takes a raw space is not verified, the encoded form is
+			// the one Parse and the rule conditions read back either way.
+			return fmt.Sprintf("git@%s:v3/%s/%s/%s", azureSSHHost, r.Owner, url.PathEscape(r.Project), r.Repo), nil
 		}
 		return fmt.Sprintf("git@%s:%s/%s.git", r.Host, r.Owner, r.Repo), nil
 	case "https":
 		if r.Project != "" {
-			return fmt.Sprintf("https://%s/%s/%s/_git/%s", r.Host, r.Owner, r.Project, r.Repo), nil
+			// A project with a space is written %20 in an Azure DevOps HTTPS
+			// URL, and Parse reads it back decoded.
+			return fmt.Sprintf("https://%s/%s/%s/_git/%s", r.Host, r.Owner, url.PathEscape(r.Project), r.Repo), nil
 		}
 		return fmt.Sprintf("https://%s/%s/%s.git", r.Host, r.Owner, r.Repo), nil
 	default:
@@ -233,6 +238,17 @@ func isAzureDevOps(host, rawHost string) bool {
 	}
 }
 
+// unescapeSegment percent decodes one path segment, returning it as written
+// when it holds a malformed escape: the segment is then taken literally,
+// the way git itself passes the path on.
+func unescapeSegment(segment string) string {
+	decoded, err := url.PathUnescape(segment)
+	if err != nil {
+		return segment
+	}
+	return decoded
+}
+
 // parseAzure reads the Azure DevOps SSH path "{org}/{project}/{repo}" when
 // sshForm is set, the leading "v3" segment already stripped by the caller;
 // otherwise the HTTPS path "{org}/{project}/_git/{repo}" from segments, or,
@@ -249,10 +265,19 @@ func parseAzure(host string, segments []string, sshForm, shorthand bool) (Remote
 		if len(segments) != 3 {
 			return Remote{}, fmt.Errorf("remote: not a recognised Azure DevOps SSH path")
 		}
-		return Remote{Host: host, Owner: segments[0], Project: segments[1], Repo: segments[2]}, nil
+		// net/url decodes the HTTPS path, the scp style path is raw, and the
+		// Azure DevOps SSH URL can carry a name with a space written as %20.
+		// Decoding here gives both forms of one repository the same project.
+		return Remote{
+			Host: host, Owner: unescapeSegment(segments[0]), Project: unescapeSegment(segments[1]), Repo: unescapeSegment(segments[2]),
+		}, nil
 	}
 	if shorthand && len(segments) == 3 {
-		return Remote{Host: host, Owner: segments[0], Project: segments[1], Repo: segments[2]}, nil
+		// Decoded like the SSH form, so "my%20project" is the project
+		// "my project", and Remote.URL does not encode it a second time.
+		return Remote{
+			Host: host, Owner: unescapeSegment(segments[0]), Project: unescapeSegment(segments[1]), Repo: unescapeSegment(segments[2]),
+		}, nil
 	}
 	if len(segments) != 4 || segments[2] != "_git" {
 		return Remote{}, fmt.Errorf("remote: not a recognised Azure DevOps HTTPS path")

@@ -49,6 +49,23 @@ var ErrUnknownKey = errors.New("config: unknown key")
 // does not exist.
 var ErrInvalidProfile = errors.New("config: invalid profile configuration")
 
+// The three errors below name the reason a rule's project, or an owner
+// that should have been a project, is refused. Each is wrapped together
+// with ErrInvalidProfile, so a caller can tell the reasons apart without
+// reading a message.
+var (
+	// ErrProjectWithoutOwner is a rule that names a project but no owner.
+	ErrProjectWithoutOwner = errors.New("config: rule project without owner")
+	// ErrProjectHost is a rule that names a project for a host whose
+	// remotes carry none. Only dev.azure.com does, so the rule could never
+	// match.
+	ErrProjectHost = errors.New("config: rule project on a host without projects")
+	// ErrOwnerHoldsProject is a dev.azure.com rule whose owner holds a "/".
+	// An owner there is the organisation alone, the project is its own
+	// field, and the owner "acme/billing" never matched anything.
+	ErrOwnerHoldsProject = errors.New("config: rule owner holds a project")
+)
+
 // configKeySection matches the section a git config key's "section.key" or
 // "section.subsection.key" form starts with: a letter followed by letters,
 // digits or "-".
@@ -68,6 +85,22 @@ var ruleHost = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
 // whole, on the same terms as ruleHost.
 var ruleSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// ruleProject matches a rule's project: words of letters, combining marks,
+// digits and ".", "-", "_", "(", ")", "&", "!", "@", "^", "~", joined by
+// single spaces. Azure DevOps allows these and a space in a project name,
+// which no other rule field may hold. Everything that would change what a
+// condition matches stays out: a glob metacharacter, a quote, a path
+// separator and "%", which would read as a percent escape in a URL.
+// validateRuleProject adds the limits Azure DevOps sets on the whole name.
+var ruleProject = regexp.MustCompile(`^[\p{L}\p{M}\p{N}._\-()&!@^~]+( [\p{L}\p{M}\p{N}._\-()&!@^~]+)*$`)
+
+// maxProjectLength is the longest project name Azure DevOps accepts, in
+// characters.
+const maxProjectLength = 64
+
+// azureDevOpsHost is the one host whose remotes carry a project.
+const azureDevOpsHost = "dev.azure.com"
+
 // hostAlias matches a host alias: ruleHost widened by the underscore an
 // ssh_config "Host" name may carry.
 var hostAlias = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`)
@@ -84,12 +117,14 @@ var profileName = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
 // every other value.
 type Profile map[string]string
 
-// Rule matches a remote to a Profile by name. Host is required; Owner and
-// Repo narrow the match further, Repo only meaningful alongside Owner. An
-// empty field matches every value of that field.
+// Rule matches a remote to a Profile by name. Host is required; Owner,
+// Project and Repo narrow the match further, Project and Repo only
+// meaningful alongside Owner. Project applies to a remote that carries one,
+// Azure DevOps only. An empty field matches every value of that field.
 type Rule struct {
 	Host    string
 	Owner   string
+	Project string
 	Repo    string
 	Profile string
 }
@@ -175,6 +210,7 @@ type rawLayout struct {
 type rawRule struct {
 	Host    string `yaml:"host"`
 	Owner   string `yaml:"owner"`
+	Project string `yaml:"project"`
 	Repo    string `yaml:"repo"`
 	Profile string `yaml:"profile"`
 }
@@ -362,7 +398,7 @@ func LoadFrom(path string) (cfg Config, err error) {
 
 	for _, rr := range r.Rules {
 		cfg.Rules = append(cfg.Rules, Rule{
-			Host: strings.ToLower(rr.Host), Owner: rr.Owner, Repo: rr.Repo, Profile: rr.Profile,
+			Host: strings.ToLower(rr.Host), Owner: rr.Owner, Project: rr.Project, Repo: rr.Repo, Profile: rr.Profile,
 		})
 	}
 

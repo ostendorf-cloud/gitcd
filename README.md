@@ -178,7 +178,7 @@ defaultProfile: private
 | `hosts.<host>.aliases` | Further host names, an SSH host alias included. | none, `ssh.dev.azure.com` and `vs-ssh.visualstudio.com` for `dev.azure.com` |
 | `hosts.<host>.protocol` | Protocol `clone` builds for a shorthand: `ssh` or `https`. | `https` |
 | `profiles.<name>` | Git config keys the profile sets. | none |
-| `rules` | Maps `host`, `owner` and `repo` to a profile. The most specific rule wins. | none |
+| `rules` | Maps `host`, `owner`, `project` (Azure DevOps) and `repo` to a profile. The most specific rule wins. | none |
 | `defaultProfile` | Profile for a remote no rule matches. | none |
 | `useConfigOnly` | Writes `user.useConfigOnly = true` into the generated files. | `true` |
 | `allowUnsafeKeys` | Profile keys that run a command or decide what git trusts, opted in by name. | none |

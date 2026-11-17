@@ -32,8 +32,9 @@ type Resolution struct {
 }
 
 // Resolve reports which profile r resolves to under cfg's rules: the most
-// specific matching rule wins, specificity ranked host, then host and
-// owner, then host, owner and repo, with cfg.DefaultProfile applied when
+// specific matching rule wins, specificity ranked as ruleTier
+// documents (host, then host and owner, then host, owner and project, then
+// host, owner and repo, then all four), with cfg.DefaultProfile applied when
 // no rule matches at all. Rule order in cfg.Rules does not decide this,
 // SortRules does.
 func Resolve(r remote.Remote, cfg config.Config) Resolution {
@@ -61,7 +62,7 @@ func Resolve(r remote.Remote, cfg config.Config) Resolution {
 // block per rule in this order, a later, more specific block always wins
 // over an earlier, less specific one, regardless of the order the
 // configuration file lists them in. Rules tied on specificity are ordered
-// by host, then owner, then repo, then profile name, so the order is
+// by host, then owner, then project, then repo, then profile name, so the order is
 // deterministic rather than depending on map or file order.
 func SortRules(rules []config.Rule) []config.Rule {
 	sorted := make([]config.Rule, len(rules))
@@ -77,6 +78,9 @@ func SortRules(rules []config.Rule) []config.Rule {
 		if a.Owner != b.Owner {
 			return a.Owner < b.Owner
 		}
+		if a.Project != b.Project {
+			return a.Project < b.Project
+		}
 		if a.Repo != b.Repo {
 			return a.Repo < b.Repo
 		}
@@ -85,29 +89,41 @@ func SortRules(rules []config.Rule) []config.Rule {
 	return sorted
 }
 
-// ruleTier ranks a rule's specificity by how many of its fields narrow the
-// match: host alone is 1, host and owner is 2, host, owner and repo is 3.
+// ruleTier ranks a rule's specificity, a total order over the shapes a
+// valid rule can have: host alone is 1, host and owner 2, host, owner and
+// project 3, host, owner and repo 4, host, owner, project and repo 5. A
+// pinned repository outranks a pinned project, since a project holds many
+// repositories and a repository name is the narrower choice. Two shapes never
+// share a tier, so the order never falls to the tie break in SortRules for
+// rules of different shapes.
 func ruleTier(r config.Rule) int {
 	tier := 0
 	if r.Host != "" {
-		tier++
+		tier = 1
 	}
 	if r.Owner != "" {
 		tier++
 	}
-	if r.Repo != "" {
+	if r.Project != "" {
 		tier++
+	}
+	if r.Repo != "" {
+		tier += 2
 	}
 	return tier
 }
 
 // ruleMatches reports whether r's non-empty fields all equal the matching
-// field of remote: an empty field matches anything.
+// field of remote: an empty field matches anything. Owner, project and repo
+// compare exactly, case included, as the rendered "hasconfig" globs do.
 func ruleMatches(r config.Rule, rm remote.Remote) bool {
 	if r.Host != "" && !strings.EqualFold(r.Host, rm.Host) {
 		return false
 	}
 	if r.Owner != "" && r.Owner != rm.Owner {
+		return false
+	}
+	if r.Project != "" && r.Project != rm.Project {
 		return false
 	}
 	if r.Repo != "" && r.Repo != rm.Repo {
