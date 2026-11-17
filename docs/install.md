@@ -10,7 +10,8 @@ gitcd version
 ```
 
 - The formula comes from `ostendorf-cloud/homebrew-tap`, written by gitcd's release pipeline.
-- Each release replaces the formula. `brew upgrade gitcd` follows it.
+- Each release replaces the formula. `brew upgrade gitcd` follows it. The formula has no
+  `version` line, Homebrew reads the version from the download URL.
 - The formula installs `git` as a dependency, since the commands that touch repositories shell
   out to git.
 - Why a formula and not a cask: `docs/adr/0003-homebrew-formula-not-cask.md`.

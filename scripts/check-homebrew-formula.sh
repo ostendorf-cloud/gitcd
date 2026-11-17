@@ -10,6 +10,11 @@
 # repository's own release downloads for <tag>, one per known platform, each
 # followed by a 64 digit hex sha256.
 #
+# The formula carries no version line: goreleaser writes one, and
+# strip-formula-version.sh removes it before this check runs, since
+# Homebrew's audit flags it as redundant with the version in the URLs. A
+# formula that still has one is rejected.
+#
 # The shapes come from a snapshot build (task test:formula runs this script
 # on one), so a change to the brews entry that alters the generated lines
 # fails there first and this list is updated with it.
@@ -76,7 +81,7 @@ fixed=(
   'end'
 )
 
-version_re='^  version "[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*"$'
+version_line_re='^[[:space:]]*version[[:space:]]'
 url_re="^      url \"${download}/gitcd_(darwin|linux)_(amd64|arm64)\\.tar\\.gz\"\$"
 sha_re='^      sha256 "[0-9a-f]{64}"$'
 
@@ -84,7 +89,6 @@ section=""
 guard=""
 want_sha=0
 urls=""
-versions=0
 line_no=0
 
 fail() {
@@ -116,9 +120,8 @@ while IFS= read -r line || [ -n "${line}" ]; do
   '    if Hardware::CPU.arm?'*) guard="arm64" ;;
   esac
 
-  if [[ ${line} =~ ${version_re} ]]; then
-    versions=$((versions + 1))
-    continue
+  if [[ ${line} =~ ${version_line_re} ]]; then
+    fail "the version line must be gone, strip-formula-version.sh removes it and Homebrew scans the version from the urls"
   fi
 
   if [[ ${line} =~ ${url_re} ]]; then
@@ -187,10 +190,6 @@ if [ "$(tail -n 1 "${formula}")" != "end" ]; then
   echo "formula must end with the class's end line" >&2
   exit 1
 fi
-if [ "${versions}" -ne 1 ]; then
-  echo "formula must carry exactly one version line, has ${versions}" >&2
-  exit 1
-fi
 for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
   count="$(printf '%s' "${urls}" | grep -cx "${platform}" || true)"
   if [ "${count}" -ne 1 ]; then
@@ -208,7 +207,7 @@ if [ "${urls}" != "${expected_urls}" ]; then
 fi
 
 # The whole file against the skeleton of the generated formula: every url,
-# sha256 and version value replaced by a placeholder, everything else, the
+# and sha256 value replaced by a placeholder, everything else, the
 # order and the indentation included, as goreleaser writes it. Ruby ignores
 # indentation, so a reordering of allowed lines (dropping the CPU guards,
 # moving a line into another block) passes every check above and changes what
@@ -219,7 +218,6 @@ trap 'rm -rf "${compare_dir}"' EXIT
 sed -E \
   -e 's|^(      url ")[^"]*(")$|\1URL\2|' \
   -e 's|^(      sha256 ")[^"]*(")$|\1SHA256\2|' \
-  -e 's|^(  version ")[^"]*(")$|\1VERSION\2|' \
   "${formula}" >"${compare_dir}/formula"
 cat >"${compare_dir}/skeleton" <<'SKELETON'
 # typed: false
@@ -229,7 +227,6 @@ cat >"${compare_dir}/skeleton" <<'SKELETON'
 class Gitcd < Formula
   desc "Clone repositories into a predictable layout and set a git identity per remote"
   homepage "https://github.com/ostendorf-cloud/gitcd"
-  version "VERSION"
   license "Apache-2.0"
 
   depends_on "git"

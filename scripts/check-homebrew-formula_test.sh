@@ -33,7 +33,6 @@ base="$(
 class Gitcd < Formula
   desc "Clone repositories into a predictable layout and set a git identity per remote"
   homepage "https://github.com/ostendorf-cloud/gitcd"
-  version "1.0.0"
   license "Apache-2.0"
 
   depends_on "git"
@@ -248,10 +247,10 @@ reject "an extra sha256 line" "$(s "${base}" "${sha1}" "${sha1}${nl}${sha1}")"
 reject "a sha256 that is not 64 lower case hex digits" "$(s "${base}" "${sha1}" '      sha256 "ABC"')"
 
 # The version line.
-reject "no version line" "$(s "${base}" "${version}" "")"
-reject "two version lines" "$(s "${base}" "${version}" "${version}${nl}${version}")"
-reject "a version with an interpolation" "$(s "${base}" "${version}" '  version "1.0.0#{x}"')"
-reject "a version with a quote" "$(s "${base}" "${version}" '  version "1.0.0"x"')"
+reject "the version line goreleaser writes" "$(s "${base}" "${homepage}" "${homepage}${nl}${version}")"
+reject "a version line with another indent" "$(s "${base}" "${homepage}" "${homepage}${nl}    version \"1.0.0\"")"
+reject "a version line with an interpolation" "$(s "${base}" "${homepage}" "${homepage}${nl}  version \"1.0.0#{x}\"")"
+reject "a version line in the place of the license" "$(s "${base}" "${license}" "${version}")"
 
 if [ "${failures}" -ne 0 ]; then
   finished=yes

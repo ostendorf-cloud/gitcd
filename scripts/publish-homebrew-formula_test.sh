@@ -134,12 +134,14 @@ normalise() {
   sed -E 's#--dir [^ ]+#--dir <dir>#'
 }
 
-# valid_formula tag version prints a formula in the shape goreleaser
-# generates, as the snapshot build in task test:formula shows.
+# valid_formula tag [version] prints a formula in the shape the release
+# publishes: goreleaser's, as the snapshot build in task test:formula shows,
+# without its version line. With a version it prints the version line too,
+# which is what the tap still holds from before the release stripped it.
 valid_formula() {
-  local tag="$1" version="$2"
+  local tag="$1" version="${2:-}"
   local base="https://github.com/ostendorf-cloud/gitcd/releases/download/${tag}"
-  cat <<EOF
+  cat <<EOF | { if [ -n "${version}" ]; then cat; else grep -v '^  version "'; fi; }
 # typed: false
 # frozen_string_literal: true
 
@@ -227,7 +229,7 @@ reset_fakes() {
   FAKE_CHECKSUMS="$(checksums_for)"
   export FAKE_CHECKSUMS
   unset FAKE_VIEW_FAILS FAKE_DOWNLOAD_FAILS FAKE_PUT_FAILS ALLOW_DOWNGRADE VERIFY_MODE
-  use_formula v1.0.0 "$(valid_formula v1.0.0 1.0.0)"
+  use_formula v1.0.0 "$(valid_formula v1.0.0)"
 }
 
 # run_case name tags want_status want_stderr_substring want_calls
@@ -329,7 +331,7 @@ FAKE_PRERELEASE=true
 run_case "a release flagged as pre-release pushes no formula" "v1.0.0" 0 "" "$(view v1.0.0)"
 
 reset_fakes
-use_formula "v1.0.0+build-1" "$(valid_formula v1.0.0+build-1 1.0.0+build-1)"
+use_formula "v1.0.0+build-1" "$(valid_formula v1.0.0+build-1)"
 run_case "a hyphen in build metadata is no pre-release" "v1.0.0+build-1" 0 "" \
   "$(view v1.0.0+build-1)
 $(download v1.0.0+build-1)
@@ -361,26 +363,26 @@ $(download v1.0.0)"
 
 # What is pushed is the formula the build generated.
 reset_fakes
-use_formula v1.0.0 "$(valid_formula v1.0.0 1.0.0 | sed 's#github.com/ostendorf-cloud/gitcd/releases#example.invalid/ostendorf-cloud/gitcd/releases#')"
+use_formula v1.0.0 "$(valid_formula v1.0.0 | sed 's#github.com/ostendorf-cloud/gitcd/releases#example.invalid/ostendorf-cloud/gitcd/releases#')"
 run_case "a formula pointing at another host is refused, even with its own hash" "v1.0.0" 1 \
   "does not match the generated formula" "$(view v1.0.0)
 $(download v1.0.0)"
 
 reset_fakes
-body="$(valid_formula v1.0.0 1.0.0)"
+body="$(valid_formula v1.0.0)"
 use_formula v1.0.0 "${body//  license \"Apache-2.0\"/  license \"Apache-2.0\"$'\n'  system \"true\"}"
 run_case "a formula with an extra Ruby line is refused, even with its own hash" "v1.0.0" 1 \
   "does not match the generated formula" "$(view v1.0.0)
 $(download v1.0.0)"
 
 reset_fakes
-use_formula v1.0.0 "$(valid_formula v0.9.0 1.0.0)"
+use_formula v1.0.0 "$(valid_formula v0.9.0)"
 run_case "a formula for another tag is refused" "v1.0.0" 1 \
   "does not match the generated formula" "$(view v1.0.0)
 $(download v1.0.0)"
 
 reset_fakes
-FAKE_FORMULA="$(valid_formula v1.0.0 1.0.0 | sed 's#3333#3334#')"
+FAKE_FORMULA="$(valid_formula v1.0.0 | sed 's#3333#3334#')"
 run_case "a formula that differs from the recorded hash is refused" "v1.0.0" 1 \
   "differs from the formula the release job generated" "$(view v1.0.0)
 $(download v1.0.0)"
@@ -392,9 +394,9 @@ run_case "a missing recorded hash stops the script" "v1.0.0" 1 \
 $(download v1.0.0)"
 
 reset_fakes
-use_formula v1.0.0 "$(valid_formula v1.0.0 1.0.1)"
-run_case "a formula with another version than the tag is refused" "v1.0.0" 1 \
-  "does not carry the version 1.0.0" "$(view v1.0.0)
+use_formula v1.0.0 "$(valid_formula v1.0.0 1.0.0)"
+run_case "a formula that still carries its version line is refused" "v1.0.0" 1 \
+  "does not match the generated formula" "$(view v1.0.0)
 $(download v1.0.0)"
 
 # The manual run, verified against the release's own checksums file.
@@ -411,7 +413,7 @@ $(put v1.0.0) ${put_end}"
 reset_fakes
 export VERIFY_MODE=checksums
 export FORMULA_HASHES=""
-FAKE_FORMULA="$(valid_formula v1.0.0 1.0.0 | sed 's#3333#3334#')"
+FAKE_FORMULA="$(valid_formula v1.0.0 | sed 's#3333#3334#')"
 run_case "the checksums mode refuses a checksum the release does not list" "v1.0.0" 1 \
   "is not the one the release lists" "$(view v1.0.0)
 $(download v1.0.0)
@@ -429,7 +431,7 @@ $(download_sums v1.0.0)"
 reset_fakes
 export VERIFY_MODE=checksums
 export FORMULA_HASHES=""
-use_formula v1.0.0 "$(valid_formula v1.0.0 1.0.0 | sed 's#github.com/ostendorf-cloud/gitcd/releases#example.invalid/ostendorf-cloud/gitcd/releases#')"
+use_formula v1.0.0 "$(valid_formula v1.0.0 | sed 's#github.com/ostendorf-cloud/gitcd/releases#example.invalid/ostendorf-cloud/gitcd/releases#')"
 export FORMULA_HASHES=""
 run_case "the checksums mode still checks the formula's structure" "v1.0.0" 1 \
   "does not match the generated formula" "$(view v1.0.0)
@@ -456,7 +458,7 @@ ${get_raw}"
 
 reset_fakes
 FAKE_TAP_STATE=present
-FAKE_TAP_FILE="$(valid_formula v2.0.0 2.0.0)"
+FAKE_TAP_FILE="$(valid_formula v2.0.0)"
 export ALLOW_DOWNGRADE=true
 run_case "an explicit input lets an older release through" "v1.0.0" 0 "" \
   "$(view v1.0.0)
@@ -477,8 +479,8 @@ $(put v1.0.0) -f sha=abc123 ${put_end}"
 
 reset_fakes
 FAKE_TAP_STATE=present
-FAKE_TAP_FILE="$(valid_formula v1.10.0 1.10.0)"
-use_formula v1.9.0 "$(valid_formula v1.9.0 1.9.0)"
+FAKE_TAP_FILE="$(valid_formula v1.10.0)"
+use_formula v1.9.0 "$(valid_formula v1.9.0)"
 run_case "versions compare numerically, 1.10.0 is newer than 1.9.0" "v1.9.0" 1 \
   "refusing to put an older formula back" "$(view v1.9.0)
 $(download v1.9.0)
@@ -487,7 +489,7 @@ ${get_raw}"
 
 reset_fakes
 FAKE_TAP_STATE=present
-FAKE_TAP_FILE="$(valid_formula v1.0.0+build-1 1.0.0+build-1)"
+FAKE_TAP_FILE="$(valid_formula v1.0.0+build-1)"
 run_case "sort -V is not semver: build metadata ranks above the plain version" "v1.0.0" 1 \
   "refusing to put an older formula back" "$(view v1.0.0)
 $(download v1.0.0)

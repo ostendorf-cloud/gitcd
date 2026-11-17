@@ -153,7 +153,21 @@ case "${GORELEASER_CURRENT_TAG:-}" in
 *-verify-fails*) : >dist/verify-fails ;;
 esac
 mkdir -p dist/homebrew/Formula
-echo formula >dist/homebrew/Formula/fixture.rb
+# The formula carries the version line goreleaser always writes, which the
+# script removes. A tag containing "-version-mismatch" simulates a version the
+# URLs do not carry, which the strip step must refuse.
+formula_version=1.0.0
+case "${GORELEASER_CURRENT_TAG:-}" in
+*-version-mismatch*) formula_version=1.0.1 ;;
+esac
+cat >dist/homebrew/Formula/fixture.rb <<FORMULA
+class Fixture < Formula
+  version "${formula_version}"
+  on_linux do
+      url "https://github.com/acme/widget/releases/download/v1.0.0/widget_linux_amd64.tar.gz"
+  end
+end
+FORMULA
 # The winget entry renders the manifest set into dist/winget. A tag containing
 # "-no-winget" simulates a run that rendered none, "-partial-winget" a set
 # without its locale file, "-empty-winget" an empty installer file,
@@ -483,7 +497,9 @@ ${verify_call}
 gh release upload v1.0.0-draft dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt dist/fixture_1.0.0_checksums.txt.sigstore.json dist/homebrew/Formula/fixture.rb ${winget_upload} --clobber
 gh release edit v1.0.0-draft --draft=false
 git worktree remove ${work}/worktree-1"
-formula_hash="$(printf 'formula\n' | shasum -a 256 | cut -d' ' -f1)"
+# The hash is that of the formula without its version line: the strip step
+# runs before the file is hashed and uploaded.
+formula_hash="$(printf 'class Fixture < Formula\n  on_linux do\n      url "https://github.com/acme/widget/releases/download/v1.0.0/widget_linux_amd64.tar.gz"\n  end\nend\n' | shasum -a 256 | cut -d' ' -f1)"
 check_formula_hashes "the formula hash of the build is a step output" \
   "formula-hashes<<FORMULA_HASHES_EOF
 v1.0.0-draft ${formula_hash}
@@ -594,6 +610,13 @@ else
 fi
 check_nothing_published "a signature that does not verify attaches and publishes nothing"
 check_formula_hashes "a build whose signature does not verify records no hash" ""
+
+run_partial_failure_case \
+  "a formula version the urls do not carry stops the script and removes the worktree" \
+  "v1.0.0-draft-version-mismatch" "is not the version 1.0.0 the urls carry"
+check_nothing_published "a formula whose version line cannot be removed attaches and publishes nothing"
+check_no_verifier_call "a formula whose version line cannot be removed is not handed to the verifier"
+check_formula_hashes "a formula whose version line cannot be removed records no hash" ""
 
 winget_dir_error="expected exactly one version directory under dist/winget/manifests/o/OstendorfCloud/gitcd for"
 

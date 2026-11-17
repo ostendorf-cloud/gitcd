@@ -145,6 +145,16 @@ while IFS= read -r tag; do
       echo "expected exactly one formula in dist/homebrew/Formula for ${tag}" >&2
       exit 1
     fi
+    # goreleaser always writes a version line, which Homebrew's audit flags as
+    # redundant with the version in the URLs. The step removes it, and only
+    # when the URLs carry the same version. It runs before the hash below is
+    # taken, so the file that is hashed, uploaded and later verified and
+    # pushed is the stripped one. See docs/adr/0003-homebrew-formula-not-cask.md.
+    echo "removing the redundant version line from the formula of ${tag}"
+    if ! "${script_dir}/strip-formula-version.sh" "${formula_files[0]}"; then
+      echo "the formula of ${tag} cannot be stripped of its version line. Nothing was attached or published, the draft release stays." >&2
+      exit 1
+    fi
     # The winget manifest set of the same run (the winget entry of
     # .goreleaser.yaml, skip_upload): one version directory with the three
     # files winget-pkgs wants. An incomplete set stops the script here, before

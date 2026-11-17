@@ -259,6 +259,21 @@ jobs:
       - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d  # v5.2.9
       - run: task test:formula
 
+  # Runs the tap's own audit, brew audit --strict and brew style, on the
+  # formula a snapshot build renders and strips of its version line, so a
+  # goreleaser change or a formula the tap would reject fails here instead of
+  # in the tap after a release. Homebrew comes with the runner image. No
+  # secrets, and the scratch tap is removed at the end of the script.
+  formula-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d  # v5.2.9
+      - run: task lint:formula-audit
+
   # Renders the winget manifest from a snapshot build and checks it against
   # the archives and checksums built in the same run, so a goreleaser change
   # that breaks the manifest fails here instead of on a release.

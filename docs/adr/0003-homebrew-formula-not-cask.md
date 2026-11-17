@@ -49,7 +49,21 @@ gitcd publishes a Homebrew formula (`brews`) to `ostendorf-cloud/homebrew-tap`, 
   (`internal/pipe/brew/templates/formula.rb`) and have no option to omit
   it, while Homebrew scans the same version from the
   `releases/download/v<version>/` URL and reports `version is redundant with version scanned
-  from URL`. Issue 84 tracks that remaining finding.
+  from URL` (`audit_version` in Homebrew's `resource_auditor.rb`).
+- The release therefore removes that one line after goreleaser rendered it, with
+  `scripts/strip-formula-version.sh`, an explicit and tested step instead of a goreleaser
+  option. It runs before the formula is hashed, uploaded, verified and pushed, and
+  `task test:formula` runs it on the snapshot, so the skeleton in
+  `scripts/check-homebrew-formula.sh` has no version line. The step refuses, with the file
+  untouched, unless exactly one version line (two spaces of indent) exists and every `url` is a
+  `https://github.com/<owner>/<repo>/releases/download/v<major>.<minor>.<patch>/<archive>.tar.gz`
+  with the same version, which the line equals or extends with a snapshot suffix. That is the
+  shape Homebrew's "GitHub releases" version parser reads, so the installed version stays the
+  one the line declared. The homebrew job reads the version from the URLs, and from a version
+  line in the tap's older formula, for its downgrade guard.
+- A `formula-audit` job in `checks.yaml` runs `brew audit --strict` and `brew style` on the
+  stripped snapshot formula in a scratch tap (`task lint:formula-audit`, CI only, as the tap's
+  own check does), so a rejection by the tap shows before a release.
 - Revisit when the binary is signed and notarised: that removes the main reason against a
   cask. Moving is a new ADR, a `homebrew_casks` entry and deleting `Formula/gitcd.rb` from the tap.
 - Issue 44 signs the checksums file with cosign, not the binary (ADR 0004). Whether that changes

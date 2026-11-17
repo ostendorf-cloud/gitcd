@@ -17,7 +17,8 @@
 #   2. the formula is downloaded from the release;
 #   3. the formula is verified against the build, see VERIFY_MODE;
 #   4. the formula's lines must all be part of the generated template, see
-#      check-homebrew-formula.sh, and its version must be the tag's;
+#      check-homebrew-formula.sh, and its version, read from its URLs since
+#      the formula has no version line, must be the tag's;
 #   5. the tap's current file is compared: an identical one is left alone,
 #      a newer version in the tap is refused, otherwise one commit is made
 #      through the contents API.
@@ -77,6 +78,21 @@ work_dir="$(mktemp -d "${TMPDIR:-/tmp}/publish-homebrew-formula.XXXXXXXX")"
 # tap_gh runs gh with the tap token only for the call that needs it.
 tap_gh() {
   GH_TOKEN="${TAP_TOKEN}" gh "$@"
+}
+
+# formula_version <file> prints the version a formula installs. A formula
+# without a version line, which is every formula this repository publishes
+# since the release strips it, has it in the download URL:
+# .../releases/download/v<version>/<archive>. An older formula in the tap still
+# carries a version line, which wins. Prints nothing when neither exists.
+formula_version() {
+  local declared
+  declared="$(sed -n -E 's/^  version "([^"]*)"$/\1/p' "$1" | head -n 1)"
+  if [ -n "${declared}" ]; then
+    printf '%s\n' "${declared}"
+    return 0
+  fi
+  sed -n -E 's|^      url "https://github\.com/[^/"]+/[^/"]+/releases/download/v([^/"]+)/[^/"]+"$|\1|p' "$1" | head -n 1
 }
 
 endpoint="repos/${tap_repository}/contents/${formula_path}"
@@ -154,8 +170,12 @@ while IFS= read -r tag; do
     echo "${formula_asset} of ${tag} does not match the generated formula, nothing pushed" >&2
     exit 1
   fi
-  if ! grep -qxF "  version \"${tag#v}\"" "${formula}"; then
-    echo "${formula_asset} does not carry the version ${tag#v}" >&2
+  # The formula has no version line, so the version it installs is the one in
+  # its URLs. check-homebrew-formula.sh above already requires every URL to be
+  # a download of this very tag, this states the same fact for the reader.
+  asset_version="$(formula_version "${formula}")"
+  if [ "${asset_version}" != "${tag#v}" ]; then
+    echo "${formula_asset} carries the version '${asset_version}', not ${tag#v}" >&2
     exit 1
   fi
 
@@ -181,7 +201,7 @@ while IFS= read -r tag; do
     # That does not matter here, since a pre-release never reaches the tap
     # (the release's own flag skips it above) and release-me emits no build
     # metadata. The test "sort -V is not semver" documents the behaviour.
-    tap_version="$(sed -n -E 's/^  version "([^"]*)"$/\1/p' "${current}" | head -n 1)"
+    tap_version="$(formula_version "${current}")"
     if [ -z "${tap_version}" ]; then
       echo "cannot read the version of ${formula_path} in ${tap_repository}" >&2
       exit 1
