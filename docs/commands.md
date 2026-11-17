@@ -15,6 +15,12 @@ success, can be wrapped by the shell function `shell-init` emits without that fu
 seeing anything on stdout but the path itself. `--verbose` adds debug logging on stderr; it
 never changes what a command writes on stdout.
 
+A scan under the configured root that skips repositories it cannot inspect reports them with one
+warning on stderr, the number skipped and a pointer to `--verbose`, not one line each. With
+`--verbose`, every skipped repository and its reason is logged at debug level. A scan that skips
+nothing logs nothing. `list` and `doctor` skip such a repository. `status`, `sync`, `cd`, `path`
+and `open` keep it, since they need only its path, and so log no warning for it.
+
 ## Remotes
 
 Every command that takes or reads a remote accepts an SSH or HTTPS URL, the scp style
@@ -153,8 +159,11 @@ $ gitcd list
 /home/me/Code/github.com/acme/other
 ```
 
-A repository `list` could not fully inspect, most commonly one with no configured remote, is
-skipped with a warning on stderr rather than failing the whole run.
+A repository `list` could not fully inspect, most commonly one with no configured remote, a
+linked worktree whose directory is gone or a directory with a broken `.git`, is skipped rather
+than failing the whole run. `list` logs one warning on stderr with the number of skipped
+repositories and nothing else when a scan skips none. `--verbose` adds one debug line per
+skipped repository with its path and the reason. `doctor` skips and reports the same way.
 
 Exit codes:
 
@@ -486,7 +495,11 @@ case of, a missing or stale managed file, and a global git identity key, which
 
   With `--fix --json`, every fix progress line that would otherwise go to stdout goes to stderr
   instead, so stdout carries nothing but the one encoded object.
-- `--verbose` enables debug logging on stderr.
+- `--verbose` enables debug logging on stderr, including one line per skipped repository with
+  its reason.
+
+A repository `doctor` could not inspect, such as one with no `origin` remote, is skipped and
+counted in one warning on stderr. The warning appears once per run, `--fix` included.
 
 ```sh
 $ gitcd doctor
