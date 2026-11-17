@@ -534,7 +534,7 @@ rules:
 	if !strings.Contains(stdout.String(), "fixed [managed-file-missing]") {
 		t.Fatalf("doctor --fix stdout = %q, want a repaired managed file so a second pass runs", stdout.String())
 	}
-	if got := strings.Count(stderr.String(), "skipped a repository scan could not inspect"); got != 1 {
+	if got := strings.Count(stderr.String(), "repositories the scan could not inspect were skipped"); got != 1 {
 		t.Errorf("doctor --fix printed the scan warning %d times, want once, stderr: %s", got, stderr.String())
 	}
 }

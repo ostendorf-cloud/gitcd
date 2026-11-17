@@ -90,9 +90,14 @@ func scanRepositories(ctx context.Context, cfg config.Config, managedDir string,
 	return kept, nil
 }
 
-// keepInspectable drops a Result scanRepositories could not resolve,
-// logging it as a warning through logger rather than failing the whole
-// command: "list" and "doctor" each act on the resolved remote and
+// keepInspectable drops a Result scanRepositories could not resolve rather
+// than failing the whole command. It logs each dropped repository with its
+// reason at debug level, so "--verbose" shows them, and one warning that
+// names how many were dropped, so a scan over a large tree prints one line
+// instead of one per repository. A scan that drops nothing logs nothing.
+// The warning is logged once per call, so a caller that scans again with
+// a discard logger, as "doctor --fix" does, keeps the run at one summary.
+// "list" and "doctor" each act on the resolved remote and
 // identity profile.Inspect provides, so a repository it could not
 // resolve, most commonly one with no configured remote, carries nothing
 // they can act on. "cd", "status", "sync", "path" and "open" need only a
@@ -102,12 +107,17 @@ func scanRepositories(ctx context.Context, cfg config.Config, managedDir string,
 // such a repository has no remote to open.)
 func keepInspectable(results []scan.Result, logger *slog.Logger) []scan.Result {
 	kept := make([]scan.Result, 0, len(results))
+	skipped := 0
 	for _, res := range results {
 		if res.Err != nil {
-			logger.Warn("skipped a repository scan could not inspect", "path", res.Repo.Path, "error", res.Err)
+			skipped++
+			logger.Debug("skipped a repository scan could not inspect", "path", res.Repo.Path, "error", res.Err)
 			continue
 		}
 		kept = append(kept, res)
+	}
+	if skipped > 0 {
+		logger.Warn("repositories the scan could not inspect were skipped, run with --verbose to see why", "count", skipped)
 	}
 	return kept
 }
