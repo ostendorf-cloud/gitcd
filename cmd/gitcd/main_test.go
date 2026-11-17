@@ -29,20 +29,53 @@ func TestRun_Version(t *testing.T) {
 	}
 }
 
-func TestRun_NoArguments(t *testing.T) {
+func TestRun_BareCallAndUsageErrors(t *testing.T) {
 	t.Parallel()
 
-	var stdout, stderr bytes.Buffer
-	code := run(nil, &stdout, &stderr)
+	var wantHelp, helpErr bytes.Buffer
+	if code := run([]string{"--help"}, &wantHelp, &helpErr); code != 0 || helpErr.Len() != 0 || wantHelp.Len() == 0 {
+		t.Fatalf("run(--help) = %d, stdout %q, stderr %q, want 0, the usage, nothing", code, wantHelp.String(), helpErr.String())
+	}
 
-	if code != 2 {
-		t.Fatalf("run(nil) = %d, want 2", code)
+	tests := []struct {
+		name string
+		args []string
+		// wantCode 0 means the usage on stdout, equal to --help, stderr empty.
+		// Otherwise stdout is empty and stderr ends with the usage.
+		wantCode int
+	}{
+		{name: "no arguments", args: nil, wantCode: 0},
+		{name: "an empty argument list", args: []string{}, wantCode: 0},
+		{name: "an unknown command", args: []string{"unknown"}, wantCode: 2},
+		{name: "an empty command name", args: []string{""}, wantCode: 2},
+		{name: "an unknown flag", args: []string{"--bogus"}, wantCode: 2},
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("run(nil) wrote to stdout, want the usage on stderr only: %q", stdout.String())
-	}
-	if !strings.Contains(stderr.String(), "Usage:") {
-		t.Fatalf("run(nil) stderr = %q, want it to contain the usage", stderr.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout, stderr bytes.Buffer
+			code := run(tt.args, &stdout, &stderr)
+
+			if code != tt.wantCode {
+				t.Fatalf("run(%q) = %d, want %d", tt.args, code, tt.wantCode)
+			}
+			if tt.wantCode == 0 {
+				if stdout.String() != wantHelp.String() {
+					t.Fatalf("run(%q) stdout = %q, want %q", tt.args, stdout.String(), wantHelp.String())
+				}
+				if stderr.Len() != 0 {
+					t.Fatalf("run(%q) wrote to stderr: %q", tt.args, stderr.String())
+				}
+				return
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("run(%q) wrote to stdout: %q", tt.args, stdout.String())
+			}
+			if !strings.HasSuffix(stderr.String(), wantHelp.String()) {
+				t.Fatalf("run(%q) stderr = %q, want it to end with the usage", tt.args, stderr.String())
+			}
+		})
 	}
 }
 

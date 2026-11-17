@@ -40,7 +40,7 @@ Commands:
   doctor       report identity and layout drift across every repository
   adopt        move an existing clone into the layout and fix its config
   shell-init   print the shell integration snippet for zsh, bash, fish, pwsh or powershell
-  version      print the version
+  version      print the version, also spelled --version
 
 Every command prints its result on stdout and everything else on stderr.
 `
@@ -51,11 +51,13 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
-		return 2
+		// A bare call is a request for orientation, not a mistake: it prints
+		// what "gitcd --help" prints, on the same stream.
+		fmt.Fprint(stdout, usage)
+		return 0
 	}
 	switch args[0] {
-	case "version":
+	case "version", "--version", "-version":
 		return runVersion(args[1:], stdout, stderr)
 	case "clone":
 		return runClone(args[1:], stdout, stderr)

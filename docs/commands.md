@@ -83,6 +83,9 @@ parses to the same owner and repository name with the `@` in it.
 `gitcd help`, `gitcd -h` and `gitcd --help` print the usage on stdout and exit 0. They take no
 topic, no argument and no flag: anything after the name exits 2, like every other command.
 
+`gitcd` with no argument prints the same usage on stdout and exits 0. An unknown command, an
+empty command name or an unknown flag still prints the usage on stderr and exits 2.
+
 ## clone
 
 Clones a remote into the path the configured layout renders for it, printing that path on
@@ -555,6 +558,10 @@ Exit codes:
 ## version
 
 Prints gitcd's own version on stdout, one line, and exits 0. It takes no flags.
+
+`gitcd --version` and `gitcd -version` are spellings of the same command and print the same
+bytes. They stand alone: anything after them exits 2, as with `version`. `gitcd clone --version`
+exits 2 because `clone` has no such flag. There is no `-V`, which exits 2 as an unknown command.
 
 The line carries the version, the commit it was built from and the build date, so a bug report
 identifies exactly what was built:
