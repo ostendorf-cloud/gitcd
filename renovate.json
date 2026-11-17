@@ -1,4 +1,4 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>ostendorf-cloud/workflows#v0.3.0"]
+  "extends": ["github>ostendorf-cloud/workflows#v0"]
 }

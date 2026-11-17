@@ -130,9 +130,9 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   there until the skeletons are updated with it. The check accepts the two installer entries in
   either order, since goreleaser's order follows the parallel archive builds. The `repository`
   block it holds is required by goreleaser and never contacted.
-- yamllint's line-length limit is 140, not the default 120. A pinned reusable workflow
-  reference needs the full line for its commit digest and version comment. Most of the
-  organisation's repositories already run at 140.
+- yamllint's line-length limit is 140, not the default 120. The license `find` command in
+  `checks.yaml`, two lines of `release.yaml` and two shell lines of `Taskfile.yaml` run past
+  120. Most of the organisation's repositories already run at 140.
 - `scripts/publish-release-assets.sh` is adapted from release-me's script of the same name and
   stays in this repository instead of the shared scripts repository: a release path must not
   fetch a script from another repository at release time, where a failure burns a version

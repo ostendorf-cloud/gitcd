@@ -20,6 +20,6 @@ concurrency:
 
 jobs:
   signoff:
-    uses: ostendorf-cloud/workflows/.github/workflows/reusable-dco.yaml@a798b963d20b239bec48c101af965e08fac36146  # v0.3.0
+    uses: ostendorf-cloud/workflows/.github/workflows/reusable-dco.yaml@v0
     secrets:
       GH_APP_SECURITY_PRIVATE_KEY: ${{ secrets.GH_APP_SECURITY_PRIVATE_KEY }}
