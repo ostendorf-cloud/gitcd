@@ -114,11 +114,13 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   skeleton has no `version` line: goreleaser always writes one and Homebrew's audit flags it as
   redundant, so `scripts/strip-formula-version.sh` removes it right after the build, in
   `publish-release-assets.sh` before the formula is hashed and in `task test:formula`. It
-  refuses unless the URLs carry the same version.
+  refuses unless the URLs carry the same version. Only a plain `vMAJOR.MINOR.PATCH` tag is
+  stripped: the formula of a pre-release keeps its version line as rendered and is never
+  pushed, the homebrew job skips it.
 - `task lint:formula-audit` and the `formula-audit` job in `checks.yaml` run `brew audit
   --strict` and `brew style` on that snapshot formula through `scripts/audit-formula.sh`, in a
-  scratch tap. It needs Homebrew, so it is CI only and not part of `check`, like the tap
-  repository's own `lint:formula`.
+  scratch tap, on Linux and macOS runners. It needs Homebrew, so it is CI only and not part of
+  `check`, like the tap repository's own `lint:formula`.
 - The `winget` entry of `.goreleaser.yaml` only renders the manifest (`skip_upload: true`), and
   the owner submits it to `microsoft/winget-pkgs` by hand, so no token for that repository
   exists in the pipeline (`docs/adr/0005-winget-manifest-semi-automatic.md`). The release

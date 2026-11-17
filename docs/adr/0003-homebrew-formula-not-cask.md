@@ -61,9 +61,19 @@ gitcd publishes a Homebrew formula (`brews`) to `ostendorf-cloud/homebrew-tap`, 
   shape Homebrew's "GitHub releases" version parser reads, so the installed version stays the
   one the line declared. The homebrew job reads the version from the URLs, and from a version
   line in the tap's older formula, for its downgrade guard.
+- Only a plain `vMAJOR.MINOR.PATCH` tag is stripped. For a tag with a pre-release or build part
+  (`v0.2.0-rc.1`), Homebrew scans another version out of the URL than the line declares (`64`
+  for that URL), so removing the line would change what the formula installs. Such a release
+  keeps its formula as rendered, version line included, and publishes as before. The formula is
+  never pushed: the homebrew job skips a pre-release and refuses, before any download, a tag
+  with a build part that is not flagged as one (`v1.0.0+build-1`).
 - A `formula-audit` job in `checks.yaml` runs `brew audit --strict` and `brew style` on the
-  stripped snapshot formula in a scratch tap (`task lint:formula-audit`, CI only, as the tap's
-  own check does), so a rejection by the tap shows before a release.
+  stripped snapshot formula in a scratch tap on `ubuntu-latest` and `macos-latest`, like the
+  tap's own `lint-formula` (`task lint:formula-audit`, CI only), so a rejection by the tap
+  shows before a release.
+- A manual re-push (`workflow_dispatch`) of `v0.1.0` cannot work from the new `main`: that
+  release's formula asset still has its version line, which the skeleton refuses. The tap
+  already holds `v0.1.0`.
 - Revisit when the binary is signed and notarised: that removes the main reason against a
   cask. Moving is a new ADR, a `homebrew_casks` entry and deleting `Formula/gitcd.rb` from the tap.
 - Issue 44 signs the checksums file with cosign, not the binary (ADR 0004). Whether that changes

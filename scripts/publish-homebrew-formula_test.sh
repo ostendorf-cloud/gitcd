@@ -332,11 +332,12 @@ run_case "a release flagged as pre-release pushes no formula" "v1.0.0" 0 "" "$(v
 
 reset_fakes
 use_formula "v1.0.0+build-1" "$(valid_formula v1.0.0+build-1)"
-run_case "a hyphen in build metadata is no pre-release" "v1.0.0+build-1" 0 "" \
-  "$(view v1.0.0+build-1)
-$(download v1.0.0+build-1)
-${get_sha}
-$(put v1.0.0+build-1) ${put_end}"
+run_case "a tag with build metadata is no pre-release, but is refused before any download" "v1.0.0+build-1" 1 \
+  "is not a plain vMAJOR.MINOR.PATCH tag" "$(view v1.0.0+build-1)"
+
+reset_fakes
+FAKE_PRERELEASE=true
+run_case "a pre-release tag is skipped, not refused" "v1.0.0-rc.1" 0 "" "$(view v1.0.0-rc.1)"
 
 # A token that can see a draft gets the draft flag, a read-only token gets
 # a 404 for it. Both must stop before anything is downloaded or pushed.

@@ -150,10 +150,21 @@ while IFS= read -r tag; do
     # when the URLs carry the same version. It runs before the hash below is
     # taken, so the file that is hashed, uploaded and later verified and
     # pushed is the stripped one. See docs/adr/0003-homebrew-formula-not-cask.md.
-    echo "removing the redundant version line from the formula of ${tag}"
-    if ! "${script_dir}/strip-formula-version.sh" "${formula_files[0]}"; then
-      echo "the formula of ${tag} cannot be stripped of its version line. Nothing was attached or published, the draft release stays." >&2
-      exit 1
+    #
+    # Only a plain vMAJOR.MINOR.PATCH tag is stripped. For a tag with a
+    # pre-release or build part, Homebrew would scan another version out of
+    # the URLs than the line declares, so removing it would change what the
+    # formula installs. That formula keeps its version line as rendered. It is
+    # attached like any other, and publish-homebrew-formula.sh never pushes
+    # it: a pre-release is skipped there and any other such tag is refused.
+    if [[ ${tag} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "removing the redundant version line from the formula of ${tag}"
+      if ! "${script_dir}/strip-formula-version.sh" "${formula_files[0]}"; then
+        echo "the formula of ${tag} cannot be stripped of its version line. Nothing was attached or published, the draft release stays." >&2
+        exit 1
+      fi
+    else
+      echo "${tag} is not a plain release tag, the formula keeps its version line and is never pushed"
     fi
     # The winget manifest set of the same run (the winget entry of
     # .goreleaser.yaml, skip_upload): one version directory with the three

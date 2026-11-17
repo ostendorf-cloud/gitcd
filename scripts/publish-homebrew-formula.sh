@@ -123,6 +123,15 @@ while IFS= read -r tag; do
     echo "${tag} is a pre-release, no formula pushed"
     continue
   fi
+  # The release strips the version line of a plain vMAJOR.MINOR.PATCH tag
+  # only. A tag with a build part that the release does not flag as a
+  # pre-release would carry a formula with its version line, which the
+  # skeleton check below refuses anyway, and whose URL Homebrew would scan
+  # another version out of. Say so here instead of with a skeleton diff.
+  if ! [[ ${tag} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "${tag} is not a plain vMAJOR.MINOR.PATCH tag: its formula keeps a version line and is never pushed, nothing pushed" >&2
+    exit 1
+  fi
 
   formula_dir="${work_dir}/${tag}"
   mkdir -p "${formula_dir}"

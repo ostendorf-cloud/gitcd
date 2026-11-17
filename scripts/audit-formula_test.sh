@@ -24,7 +24,15 @@ export CALL_LOG="${work}/calls"
 cat <<'FAKE_BREW' >"${fake_bin}/brew"
 #!/usr/bin/env bash
 if [ "$#" -eq 1 ] && [ "$1" = "tap" ]; then
-  [ "${FAKE_TAPPED:-no}" = yes ] && echo "gitcd-ci/audit"
+  if [ "${FAKE_TAP_LIST_FAILS:-no}" = yes ]; then
+    exit 1
+  fi
+  if [ "${FAKE_TAPPED:-no}" = yes ]; then
+    # The scratch tap first, then enough lines to fill a pipe buffer: a
+    # "brew tap | grep -q" would end by SIGPIPE here.
+    echo "gitcd-ci/audit"
+    seq 1 40000
+  fi
   exit 0
 fi
 echo "brew $*" >>"${CALL_LOG}"
@@ -80,6 +88,7 @@ brew untrust --formula ${ref}
 brew untap --force gitcd-ci/audit"
 FAKE_FAIL=tap run_case "a failing tap removes nothing it did not create" 1 "brew tap gitcd-ci/audit <dir>"
 FAKE_TAPPED=yes run_case "an already tapped scratch name is refused and left alone" 2 ""
+FAKE_TAP_LIST_FAILS=yes run_case "a failing tap listing stops the run instead of reading as not tapped" 1 ""
 run_case "a missing formula is refused" 2 "" "${work}/missing.rb"
 
 leftover="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'audit-formula.*' 2>/dev/null | wc -l | tr -d ' ')"

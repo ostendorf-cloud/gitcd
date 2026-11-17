@@ -153,18 +153,18 @@ case "${GORELEASER_CURRENT_TAG:-}" in
 *-verify-fails*) : >dist/verify-fails ;;
 esac
 mkdir -p dist/homebrew/Formula
-# The formula carries the version line goreleaser always writes, which the
-# script removes. A tag containing "-version-mismatch" simulates a version the
-# URLs do not carry, which the strip step must refuse.
-formula_version=1.0.0
-case "${GORELEASER_CURRENT_TAG:-}" in
-*-version-mismatch*) formula_version=1.0.1 ;;
-esac
+# The formula carries the version line goreleaser always writes, with the
+# version and the URLs of the tag being built. The script removes the line for
+# a plain vMAJOR.MINOR.PATCH tag only. FAKE_FORMULA_VERSION overrides the
+# version of the line, to simulate one the URLs do not carry, which the strip
+# step must refuse.
+tag="${GORELEASER_CURRENT_TAG:-}"
+formula_version="${FAKE_FORMULA_VERSION:-${tag#v}}"
 cat >dist/homebrew/Formula/fixture.rb <<FORMULA
 class Fixture < Formula
   version "${formula_version}"
   on_linux do
-      url "https://github.com/acme/widget/releases/download/v1.0.0/widget_linux_amd64.tar.gz"
+      url "https://github.com/acme/widget/releases/download/${tag}/widget_linux_amd64.tar.gz"
   end
 end
 FORMULA
@@ -237,7 +237,7 @@ cat <<'FAKE_GH' >"${fake_bin}/gh"
 echo "gh $*" >>"${CALL_LOG}"
 if [ "$1 $2" = "release view" ]; then
   case "$3" in
-  *-draft*) echo true ;;
+  *-draft* | v1.0.0 | v1.0.0-rc.1) echo true ;;
   *-published*) echo false ;;
   *-view-fails*) echo "fake gh: release view failed" >&2; exit 1 ;;
   *) echo "fake gh: unknown tag $3" >&2; exit 1 ;;
@@ -497,9 +497,20 @@ ${verify_call}
 gh release upload v1.0.0-draft dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt dist/fixture_1.0.0_checksums.txt.sigstore.json dist/homebrew/Formula/fixture.rb ${winget_upload} --clobber
 gh release edit v1.0.0-draft --draft=false
 git worktree remove ${work}/worktree-1"
-# The hash is that of the formula without its version line: the strip step
-# runs before the file is hashed and uploaded.
-formula_hash="$(printf 'class Fixture < Formula\n  on_linux do\n      url "https://github.com/acme/widget/releases/download/v1.0.0/widget_linux_amd64.tar.gz"\n  end\nend\n' | shasum -a 256 | cut -d' ' -f1)"
+# fixture_hash tag [stripped] is the sha256 of the formula the fake goreleaser
+# renders for tag, without its version line when the second argument is given.
+# The strip step runs before the file is hashed and uploaded, and only for a
+# plain tag, so "v1.0.0-draft" is hashed as rendered.
+fixture_hash() {
+  {
+    printf 'class Fixture < Formula\n'
+    if [ -z "${2:-}" ]; then
+      printf '  version "%s"\n' "${1#v}"
+    fi
+    printf '  on_linux do\n      url "https://github.com/acme/widget/releases/download/%s/widget_linux_amd64.tar.gz"\n  end\nend\n' "$1"
+  } | shasum -a 256 | cut -d' ' -f1
+}
+formula_hash="$(fixture_hash v1.0.0-draft)"
 check_formula_hashes "the formula hash of the build is a step output" \
   "formula-hashes<<FORMULA_HASHES_EOF
 v1.0.0-draft ${formula_hash}
@@ -611,12 +622,47 @@ fi
 check_nothing_published "a signature that does not verify attaches and publishes nothing"
 check_formula_hashes "a build whose signature does not verify records no hash" ""
 
+# A plain tag has its version line removed, before the hash is taken: the hash
+# is that of the stripped file and the upload still happens.
+run_case "a stable tag is built, stripped, attached and published" "v1.0.0" \
+  "git fetch origin --tags --force
+gh release view v1.0.0 --json isDraft --jq .isDraft
+git worktree add --quiet --detach ${work}/worktree-1 v1.0.0
+goreleaser release --clean --skip=announce,validate,publish
+${verify_call}
+gh release upload v1.0.0 dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt dist/fixture_1.0.0_checksums.txt.sigstore.json dist/homebrew/Formula/fixture.rb ${winget_upload} --clobber
+gh release edit v1.0.0 --draft=false
+git worktree remove ${work}/worktree-1"
+check_formula_hashes "a stable tag hands over the hash of the stripped formula" \
+  "formula-hashes<<FORMULA_HASHES_EOF
+v1.0.0 $(fixture_hash v1.0.0 stripped)
+FORMULA_HASHES_EOF"
+
+# A pre-release tag keeps the formula as rendered, version line included: its
+# URLs would make Homebrew scan another version. It publishes as before and the
+# homebrew job never pushes it.
+run_case "a pre-release tag is built, attached and published with its formula unstripped" "v1.0.0-rc.1" \
+  "git fetch origin --tags --force
+gh release view v1.0.0-rc.1 --json isDraft --jq .isDraft
+git worktree add --quiet --detach ${work}/worktree-1 v1.0.0-rc.1
+goreleaser release --clean --skip=announce,validate,publish
+${verify_call}
+gh release upload v1.0.0-rc.1 dist/fixture_linux_amd64.tar.gz dist/fixture_windows_amd64.zip dist/fixture_1.0.0_checksums.txt dist/fixture_1.0.0_checksums.txt.sigstore.json dist/homebrew/Formula/fixture.rb ${winget_upload} --clobber
+gh release edit v1.0.0-rc.1 --draft=false
+git worktree remove ${work}/worktree-1"
+check_formula_hashes "a pre-release tag hands over the hash of the formula as rendered" \
+  "formula-hashes<<FORMULA_HASHES_EOF
+v1.0.0-rc.1 $(fixture_hash v1.0.0-rc.1)
+FORMULA_HASHES_EOF"
+
+export FAKE_FORMULA_VERSION=1.0.1
 run_partial_failure_case \
   "a formula version the urls do not carry stops the script and removes the worktree" \
-  "v1.0.0-draft-version-mismatch" "is not the version 1.0.0 the urls carry"
+  "v1.0.0" "is not the version 1.0.0 the urls carry"
 check_nothing_published "a formula whose version line cannot be removed attaches and publishes nothing"
 check_no_verifier_call "a formula whose version line cannot be removed is not handed to the verifier"
 check_formula_hashes "a formula whose version line cannot be removed records no hash" ""
+unset FAKE_FORMULA_VERSION
 
 winget_dir_error="expected exactly one version directory under dist/winget/manifests/o/OstendorfCloud/gitcd for"
 
@@ -685,7 +731,7 @@ run_partial_failure_case \
   "v1.0.0-draft-upload-fails" "fake gh: upload failed"
 check_formula_hashes "a failure after the build still hands over the hash" \
   "formula-hashes<<FORMULA_HASHES_EOF
-v1.0.0-draft-upload-fails ${formula_hash}
+v1.0.0-draft-upload-fails $(fixture_hash v1.0.0-draft-upload-fails)
 FORMULA_HASHES_EOF"
 
 if [ "${failures}" -ne 0 ]; then

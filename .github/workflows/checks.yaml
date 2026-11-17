@@ -263,10 +263,17 @@ jobs:
   # formula a snapshot build renders and strips of its version line, so a
   # goreleaser change or a formula the tap would reject fails here instead of
   # in the tap after a release. Homebrew comes with the runner image. No
-  # secrets, and the scratch tap is removed at the end of the script.
+  # secrets, and the scratch tap is removed at the end of the script. Both
+  # systems, like the tap's own lint-formula job, since brew evaluates the
+  # on_macos and on_linux blocks of the formula per host.
   formula-audit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: formula-audit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

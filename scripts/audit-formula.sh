@@ -65,7 +65,10 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
 
-if brew tap | grep -Fxq "${tap}"; then
+# The list is read first and searched as a variable: a pipe into grep -q can
+# end by SIGPIPE under pipefail and read as "not tapped".
+taps="$(brew tap)"
+if grep -Fxq "${tap}" <<<"${taps}"; then
   die "${tap} is already tapped: untap it first, this check needs its own scratch tap"
 fi
 
