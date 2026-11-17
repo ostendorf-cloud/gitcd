@@ -1,5 +1,17 @@
 # Changelog
 
+## [v0.2.0](https://github.com/ostendorf-cloud/gitcd/compare/v0.1.0...v0.2.0) (2026-11-17)
+
+### Features
+
+- **cli:** accept --version and show help for a bare call ([#91](https://github.com/ostendorf-cloud/gitcd/pull/91))
+- let a rule name an Azure DevOps project ([#89](https://github.com/ostendorf-cloud/gitcd/pull/89))
+
+### Bug Fixes
+
+- report skipped repositories once ([#94](https://github.com/ostendorf-cloud/gitcd/pull/94))
+- **release:** drop the redundant version line, shorten the description, write schema 1.28 ([#87](https://github.com/ostendorf-cloud/gitcd/pull/87))
+
 ## v0.1.0 (2026-11-16)
 
 ### Features
