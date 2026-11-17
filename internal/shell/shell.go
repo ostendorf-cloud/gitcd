@@ -18,8 +18,15 @@ package shell
 import "fmt"
 
 // bashLike is the "gitcd" function body shared by bash and zsh, whose
-// command substitution and case syntax agree.
+// command substitution and case syntax agree. A bare call runs the binary
+// before anything reads "$1": a bare "gitcd" prints the usage and exits 0,
+// and an unguarded "$1" aborts under "set -u" or "setopt nounset". Every
+// wrapper guards its bare call the same way, for the same reason.
 const bashLike = `gitcd() {
+  if [ "$#" -eq 0 ]; then
+    command gitcd
+    return $?
+  fi
   local real
   real="$(command gitcd "$@")" || return $?
   case "$1" in
@@ -78,6 +85,10 @@ const fishCompletion = `complete -c gitcd -n '__fish_seen_subcommand_from cd' -f
 // goes to $HOME (fishshell.com/docs/current/cmds/cd.html), so an empty
 // "$real" must never reach it unguarded.
 const fish = `function gitcd
+    if test (count $argv) -eq 0
+        command gitcd
+        return $status
+    end
     set -l real (command gitcd $argv)
     set -l code $status
     if test $code -ne 0
@@ -133,6 +144,10 @@ end
 // call the last thing that could have set $LASTEXITCODE.
 const powerShell = `function gitcd {
     $gitcdPath = (Get-Command gitcd -CommandType Application | Select-Object -First 1).Source
+    if ($args.Count -eq 0) {
+        & $gitcdPath
+        return
+    }
     $real = & $gitcdPath @args
     if ($LASTEXITCODE -ne 0) {
         return

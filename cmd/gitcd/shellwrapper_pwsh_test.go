@@ -105,6 +105,11 @@ func TestShellWrapper_ExecutesInPowerShell(t *testing.T) {
 		{"PASS_OUT", "gitcd dev (commit none, built unknown)"},
 		{"CD_COMPLETIONS", "widget"},
 		{"STATUS_COMPLETION_COUNT", "0"},
+		{"STRICT_ERROR", ""},
+		{"BARE_EXIT", "0"},
+		{"BARE_USAGE", "True"},
+		{"STRICT_VERSION_OUT", "gitcd dev (commit none, built unknown)"},
+		{"STRICT_VERSION_FLAG_OUT", "gitcd dev (commit none, built unknown)"},
 	} {
 		if want.key == "DRYRUN_OUT" || want.key == "CLONE_CWD" {
 			// A path: the same directory can be spelled with a short
@@ -177,6 +182,21 @@ $cdCompletion = [System.Management.Automation.CommandCompletion]::CompleteInput(
 $statusInput = 'gitcd status wid'
 $statusCompletion = [System.Management.Automation.CommandCompletion]::CompleteInput($statusInput, $statusInput.Length, $null)
 "STATUS_COMPLETION_COUNT=$($statusCompletion.CompletionMatches.Count)"
+
+# A bare call, "version" and "--version" under strict mode: indexing the
+# first argument of an empty list throws there, so the bare call must run
+# the binary before anything reads $args[0]. The usage goes to stdout and
+# the exit code is 0.
+Set-StrictMode -Version Latest
+try {
+    $bareOut = (gitcd) -join "|"
+    "BARE_EXIT=$LASTEXITCODE"
+    "BARE_USAGE=$($bareOut -like 'gitcd clones repositories*|*Usage:*')"
+    "STRICT_VERSION_OUT=$(gitcd version)"
+    "STRICT_VERSION_FLAG_OUT=$(gitcd --version)"
+} catch {
+    "STRICT_ERROR=$($_.Exception.Message)"
+}
 `, cloneURL)
 }
 

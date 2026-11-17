@@ -115,6 +115,134 @@ func TestBashAndZshSnippetsAreSyntacticallyValid(t *testing.T) {
 	}
 }
 
+// TestWrapper_BareCallRunsTheBinaryUnderStrictShellOptions sources the
+// bash and zsh snippets in a non interactive shell with and without
+// "set -u" or "setopt nounset", then calls the wrapper with no argument,
+// "version" and "--version". A fake "gitcd" on PATH prints a usage for the
+// bare call, so the test sees the wrapper hand it through unchanged.
+// Without the guard, an unguarded "$1" aborts the shell under nounset.
+func TestWrapper_BareCallRunsTheBinaryUnderStrictShellOptions(t *testing.T) {
+	t.Parallel()
+
+	fakeBin := t.TempDir()
+	fakeScript := "#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"  '') printf 'Usage:\\n  gitcd <command>\\n' ;;\n" +
+		"  version|--version) printf 'gitcd dev\\n' ;;\n" +
+		"  *) exit 2 ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(fakeBin, "gitcd"), []byte(fakeScript), 0o755); err != nil {
+		t.Fatalf("write the fake gitcd: %v", err)
+	}
+
+	shells := []struct {
+		name    string
+		snippet string
+		strict  string
+	}{
+		{name: "bash", snippet: shell.Bash(), strict: "set -u\n"},
+		{name: "zsh", snippet: shell.Zsh(), strict: "setopt nounset\n"},
+	}
+	calls := []struct {
+		name string
+		call string
+		want string
+	}{
+		{name: "a bare call", call: "gitcd", want: "Usage:\n  gitcd <command>\n"},
+		{name: "version", call: "gitcd version", want: "gitcd dev\n"},
+		{name: "the version flag", call: "gitcd --version", want: "gitcd dev\n"},
+	}
+	for _, sh := range shells {
+		for _, strict := range []bool{false, true} {
+			for _, tc := range calls {
+				name := sh.name + "/" + tc.name
+				if strict {
+					name += "/nounset"
+				}
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+
+					path, err := exec.LookPath(sh.name)
+					if err != nil {
+						t.Skipf("%s is not installed", sh.name)
+					}
+					dir := t.TempDir()
+					file := filepath.Join(dir, "init.sh")
+					if err := os.WriteFile(file, []byte(sh.snippet), 0o644); err != nil {
+						t.Fatalf("write %s: %v", file, err)
+					}
+					script := ""
+					if strict {
+						script = sh.strict
+					}
+					// compdef only exists in a completion session.
+					script += "compdef() { :; }\n. \"$1\"\n" + tc.call + "\n"
+
+					cmd := exec.CommandContext(context.Background(), path, "-c", script, "--", file)
+					cmd.Env = append(os.Environ(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+					var stdout, stderr strings.Builder
+					cmd.Stdout = &stdout
+					cmd.Stderr = &stderr
+					if err := cmd.Run(); err != nil {
+						t.Fatalf("%s: %v, stderr %q", tc.call, err, stderr.String())
+					}
+					if stdout.String() != tc.want {
+						t.Fatalf("%s stdout = %q, want %q", tc.call, stdout.String(), tc.want)
+					}
+					if stderr.Len() != 0 {
+						t.Fatalf("%s wrote to stderr: %q", tc.call, stderr.String())
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestFish_GuardsABareCall checks the fish snippet by string match only,
+// since fish is not installed here: an empty "$argv" expands to no word at
+// all, so "switch $argv[1]" has to stay behind a guard that runs the
+// binary for a bare call.
+func TestFish_GuardsABareCall(t *testing.T) {
+	t.Parallel()
+
+	snippet := shell.Fish()
+	guard := "if test (count $argv) -eq 0\n        command gitcd\n        return $status\n    end\n"
+	guardAt := strings.Index(snippet, guard)
+	if guardAt < 0 {
+		t.Fatalf("fish snippet has no bare call guard: %s", snippet)
+	}
+	if switchAt := strings.Index(snippet, "switch $argv[1]"); switchAt < guardAt {
+		t.Fatalf("fish snippet reads $argv[1] before the bare call guard: %s", snippet)
+	}
+}
+
+// TestZsh_CdCompletionToleratesAShortCommandLineUnderNounset runs the
+// completion function with only the command name typed, under
+// "setopt nounset": "${words[2]}" must not abort the shell.
+func TestZsh_CdCompletionToleratesAShortCommandLineUnderNounset(t *testing.T) {
+	t.Parallel()
+
+	zshPath, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh is not installed")
+	}
+	file := filepath.Join(t.TempDir(), "init.zsh")
+	if err := os.WriteFile(file, []byte(shell.Zsh()), 0o644); err != nil {
+		t.Fatalf("write %s: %v", file, err)
+	}
+	script := `setopt nounset
+compdef() { :; }
+compadd() { :; }
+source "$1"
+words=(gitcd)
+_gitcd
+`
+	cmd := exec.CommandContext(context.Background(), zshPath, "-c", script, "--", file)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run the zsh completion function: %v: %s", err, out)
+	}
+}
+
 // TestZsh_CdCompletionOffersEveryRepositoryByItsShortName runs the real
 // zsh completion function the Zsh snippet defines, with "compadd" and
 // "compdef" stubbed out since neither is available outside a terminal
