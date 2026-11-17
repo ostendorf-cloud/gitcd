@@ -39,6 +39,7 @@ jobs:
           $base = 'https://github.com/ostendorf-cloud/gitcd/releases/download/v0.1.0'
           $dir = 'C:\probe'
           $manifest = Join-Path $dir 'manifest'
+          $release = Join-Path $dir 'release'
           $results = [System.Collections.Generic.List[object]]::new()
 
           function Add-Result([string]$Name, [string]$Status, [string]$Detail = '') {
@@ -60,8 +61,15 @@ jobs:
             Write-Host "exit code: $code"
             Write-Host '::endgroup::'
             $status = if ($Pass -contains $code) { 'PASS' } else { 'FAIL' }
-            Add-Result $Name $status "exit $code"
+            # A failure carries the first 5 output lines into the summary.
+            $detail = "exit $code ($(ConvertTo-HexCode $code))"
+            if ($status -eq 'FAIL') {
+              $first = ($out -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 5) -join ' / '
+              $detail += " $first"
+            }
+            Add-Result $Name $status $detail
           }
+          function ConvertTo-HexCode([int]$Code) { '0x{0:X8}' -f $Code }
           # Machine and user PATH from the registry, plus the winget links folders.
           function Update-ProbePath {
             $m = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -107,16 +115,35 @@ jobs:
           } else { Add-Result '2 repair' 'SKIP' 'winget already present' }
 
           # (3) Download the manifest set and the checksums file of v0.1.0.
-          New-Item -ItemType Directory -Force -Path $manifest | Out-Null
+          # The manifest folder holds exactly the three yaml files: winget
+          # rejects any other file in it. The checksums file goes next to it.
+          New-Item -ItemType Directory -Force -Path $manifest, $release | Out-Null
           $files = 'OstendorfCloud.gitcd.yaml', 'OstendorfCloud.gitcd.installer.yaml',
             'OstendorfCloud.gitcd.locale.en-US.yaml', 'gitcd_0.1.0_checksums.txt'
           Write-Host '::group::3 download'
           foreach ($f in $files) {
+            $target = if ($f -like '*.yaml') { $manifest } else { $release }
             try {
-              Invoke-WebRequest -UseBasicParsing -Uri "$base/$f" -OutFile (Join-Path $manifest $f)
-              Add-Result "3 download $f" 'PASS' "$((Get-Item (Join-Path $manifest $f)).Length) bytes"
+              Invoke-WebRequest -UseBasicParsing -Uri "$base/$f" -OutFile (Join-Path $target $f)
+              Add-Result "3 download $f" 'PASS' "$((Get-Item (Join-Path $target $f)).Length) bytes"
             } catch { Add-Result "3 download $f" 'FAIL' "$_" }
           }
+          Write-Host '::endgroup::'
+
+          # (3b) Every InstallerSha256 of the manifest must be in the checksums file.
+          Write-Host '::group::3b checksums vs installer manifest'
+          try {
+            $sums = (Get-Content (Join-Path $release 'gitcd_0.1.0_checksums.txt')) |
+              ForEach-Object { ($_ -split '\s+')[0].ToLower() }
+            $hashes = Select-String -Path (Join-Path $manifest 'OstendorfCloud.gitcd.installer.yaml') `
+              -Pattern 'InstallerSha256:\s*([0-9A-Fa-f]{64})' |
+              ForEach-Object { $_.Matches[0].Groups[1].Value.ToLower() }
+            $missing = @($hashes | Where-Object { $sums -notcontains $_ })
+            $hashes | ForEach-Object { Write-Host "$_ in checksums: $($sums -contains $_)" }
+            $ok = ($hashes.Count -ge 1) -and ($missing.Count -eq 0)
+            $detail = "$($hashes.Count) hashes, $($missing.Count) missing"
+            Add-Result '3b installer sha256 in checksums file' $(if ($ok) { 'PASS' } else { 'FAIL' }) $detail
+          } catch { Add-Result '3b installer sha256 in checksums file' 'FAIL' "$_" }
           Write-Host '::endgroup::'
 
           # (4) Validate the manifest.
@@ -142,7 +169,7 @@ jobs:
             Write-Host $out
             Write-Host "exit code: $code"
             Write-Host '::endgroup::'
-            Add-Result $label 'INFO' "exit $code"
+            Add-Result $label 'INFO' "exit $code ($(ConvertTo-HexCode $code))"
           }
 
           # (9) Nested portable zip install: what did it leave behind? Runs
