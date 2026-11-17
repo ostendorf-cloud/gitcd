@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ErrUnsafeKey is wrapped into the error Load returns when a profile
@@ -760,10 +762,13 @@ func ValidateProfileValue(value string) error {
 	return nil
 }
 
-// ValidateRule reports whether r's host, owner and repo can be rendered
-// into the include file's conditions.
+// ValidateRule reports whether r's host, owner, project and repo can be
+// rendered into the include file's conditions.
 //
-// The three are interpolated into an "includeIf" condition, a
+// The project is held to a class of its own, since an Azure DevOps project
+// may hold a space, see validateRuleProject.
+//
+// The fields are interpolated into an "includeIf" condition, a
 // "gitdir/i:" path glob and a "hasconfig:remote.*.url:" URL glob, so
 // each one is validated against a character class that holds no glob
 // metacharacter, no quote and no path traversal segment at all. That is
@@ -788,6 +793,18 @@ func ValidateRule(r Rule) error {
 	}
 	if r.Owner != "" {
 		if err := validateRuleSegments("owner", r.Owner); err != nil {
+			return err
+		}
+		if r.Host == azureDevOpsHost && strings.Contains(r.Owner, "/") {
+			return fmt.Errorf(
+				"%w: %w: rule owner %q for host %q holds a \"/\": the owner is the organisation, "+
+					"write the project as project: %q",
+				ErrInvalidProfile, ErrOwnerHoldsProject, r.Owner, r.Host, r.Owner[strings.Index(r.Owner, "/")+1:],
+			)
+		}
+	}
+	if r.Project != "" {
+		if err := validateRuleProject(r); err != nil {
 			return err
 		}
 	}
@@ -1025,6 +1042,67 @@ func (c Config) validateProfiles() error {
 		}
 	}
 	return nil
+}
+
+// validateRuleProject validates the project of rule r, which is not empty.
+// A project needs an owner, since it is a part of the organisation, and a
+// host whose remotes carry one: only dev.azure.com does, and on any other
+// host the rule would silently never match, the failure mode a rule field
+// is validated against.
+func validateRuleProject(r Rule) error {
+	switch {
+	case r.Owner == "":
+		return fmt.Errorf(
+			"%w: %w: rule for host %q names the project %q without an owner",
+			ErrInvalidProfile, ErrProjectWithoutOwner, r.Host, r.Project,
+		)
+	case r.Host != azureDevOpsHost:
+		return fmt.Errorf(
+			"%w: %w: rule for host %q names the project %q, but only %s remotes carry a project",
+			ErrInvalidProfile, ErrProjectHost, r.Host, r.Project, azureDevOpsHost,
+		)
+	case !ruleProject.MatchString(r.Project):
+		return fmt.Errorf(
+			"%w: rule project %q may hold only letters, marks, digits, \". - _ ( ) & ! @ ^ ~\" and single spaces between words",
+			ErrInvalidProfile, r.Project,
+		)
+	case strings.HasPrefix(r.Project, "_") || strings.HasPrefix(r.Project, ".") || strings.HasSuffix(r.Project, "."):
+		return fmt.Errorf(
+			"%w: rule project %q may not start with \"_\" or \".\" or end with \".\", Azure DevOps refuses such a name",
+			ErrInvalidProfile, r.Project,
+		)
+	case projectHasLookAlikeMark(r.Project):
+		return fmt.Errorf(
+			"%w: rule project %q starts a word with a combining mark or holds a variation selector, "+
+				"which allow look-alike names",
+			ErrInvalidProfile, r.Project,
+		)
+	case utf8.RuneCountInString(r.Project) > maxProjectLength:
+		return fmt.Errorf(
+			"%w: rule project %q is longer than the %d characters Azure DevOps allows",
+			ErrInvalidProfile, r.Project, maxProjectLength,
+		)
+	}
+	return nil
+}
+
+// projectHasLookAlikeMark reports whether project has a word that starts
+// with a combining mark, or holds the variation selectors U+FE0E or U+FE0F.
+// Both render as nothing or attach to the character before, so two names
+// that look the same would differ. A mark after a letter stays valid, so the
+// composed and the decomposed spelling of "Café" are both accepted. The zero
+// width characters, U+200B to U+200D, U+2060 and U+FEFF, are not in the
+// accepted class at all.
+func projectHasLookAlikeMark(project string) bool {
+	if strings.ContainsAny(project, "︎️") {
+		return true
+	}
+	for _, word := range strings.Split(project, " ") {
+		if first, _ := utf8.DecodeRuneInString(word); unicode.Is(unicode.M, first) {
+			return true
+		}
+	}
+	return false
 }
 
 // validateRuleSegments validates a rule's owner, which may carry "/"

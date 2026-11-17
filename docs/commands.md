@@ -329,7 +329,8 @@ Exit codes:
 `gitcd profile show [path]` prints the profile the configured rules expect for `path`'s remote,
 the specific rule that matched, if any, and the identity git actually resolves right now for
 `user.email` and `user.signingkey`, each with its origin: pinned locally, applied through
-`gitcd apply`, set elsewhere (outside any profile gitcd manages), or unset.
+`gitcd apply`, set elsewhere (outside any profile gitcd manages), or unset. The rule is printed
+with the fields it sets: `host`, `owner`, `project` and `repo`, in that order.
 
 - `--verbose` enables debug logging on stderr.
 
@@ -339,6 +340,12 @@ remote: git@github.com:acme/widget.git
 expected profile: work (rule: host="github.com" owner="acme")
 user.email: work@example.com (a profile applied through gitcd apply)
 user.signingkey: (unset)
+```
+
+For an Azure DevOps repository matched by a rule that names a project:
+
+```text
+expected profile: work (rule: host="dev.azure.com" owner="acme" project="billing")
 ```
 
 Exit codes:

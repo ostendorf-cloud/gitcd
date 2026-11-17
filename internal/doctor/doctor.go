@@ -48,11 +48,11 @@ const (
 	// character case only: the layout renders the same path, spelled
 	// differently, which "doctor --fix" repairs with a rename.
 	KindPathCase Kind = "path-case-mismatch"
-	// KindRuleCaseMismatch is a configured rule whose host, owner and
-	// repo would all match a repository case-insensitively, but do not
-	// match exactly: profile.Resolve, and the "hasconfig" glob
+	// KindRuleCaseMismatch is a configured rule whose host, owner,
+	// project and repo would all match a repository case-insensitively, but
+	// do not match exactly: profile.Resolve, and the "hasconfig" glob
 	// internal/gitconfig renders from the same literal fields, are both
-	// case sensitive on owner and repo, so the rule silently never
+	// case sensitive on owner, project and repo, so the rule silently never
 	// applies as written.
 	KindRuleCaseMismatch Kind = "rule-case-mismatch"
 	// KindManagedFileMissing is a file "gitcd apply" renders that does
@@ -360,8 +360,9 @@ func CheckAncestorCaseConflicts(repos []RepoPath) []Finding {
 }
 
 // checkRuleCase reports KindRuleCaseMismatch for every rule whose host,
-// owner and repo all match repo's remote case-insensitively but not
-// exactly: profile.Resolve compares owner and repo with a case sensitive
+// owner, project and repo all match repo's remote case-insensitively but
+// not exactly: profile.Resolve compares owner, project and repo with a case
+// sensitive
 // "!=", so such a rule never actually applies, silently, and the
 // "hasconfig" glob internal/gitconfig renders from the same literal
 // fields inherits the same gap, since git's own wildmatch there is case
@@ -373,21 +374,25 @@ func checkRuleCase(cfg config.Config, name string, repo profile.Repo) []Finding 
 			continue
 		}
 		ownerFold := rule.Owner == "" || strings.EqualFold(rule.Owner, repo.Remote.Owner)
+		projectFold := rule.Project == "" || strings.EqualFold(rule.Project, repo.Remote.Project)
 		repoFold := rule.Repo == "" || strings.EqualFold(rule.Repo, repo.Remote.Repo)
-		if !ownerFold || !repoFold {
+		if !ownerFold || !projectFold || !repoFold {
 			continue
 		}
 		exactOwner := rule.Owner == "" || rule.Owner == repo.Remote.Owner
+		exactProject := rule.Project == "" || rule.Project == repo.Remote.Project
 		exactRepo := rule.Repo == "" || rule.Repo == repo.Remote.Repo
-		if exactOwner && exactRepo {
+		if exactOwner && exactProject && exactRepo {
 			continue
 		}
 		findings = append(findings, Finding{
 			Kind: KindRuleCaseMismatch,
 			Repo: name,
 			Message: fmt.Sprintf(
-				"rule host=%q owner=%q repo=%q profile=%q would match this repository but for a case difference (actual owner=%q repo=%q); the rule never applies as written",
-				rule.Host, rule.Owner, rule.Repo, rule.Profile, repo.Remote.Owner, repo.Remote.Repo,
+				"rule host=%q owner=%q project=%q repo=%q profile=%q would match this repository but for a case difference "+
+					"(actual owner=%q project=%q repo=%q); the rule never applies as written",
+				rule.Host, rule.Owner, rule.Project, rule.Repo, rule.Profile,
+				repo.Remote.Owner, repo.Remote.Project, repo.Remote.Repo,
 			),
 		})
 	}

@@ -11,6 +11,7 @@ package gitconfig
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -207,6 +208,12 @@ func renderIncludes(cfg config.Config, home string) string {
 
 		for _, root := range roots {
 			gitdirGlob := renderGitdirGlob(cfg, rule, root)
+			if gitdirGlob == "" {
+				// The layout has no place for the rule's project, so a path
+				// condition would match every project. The URL conditions
+				// below still pin it.
+				continue
+			}
 			fmt.Fprintf(&b, "\n[includeIf \"gitdir/i:%s\"]\n\tpath = %s\n", gitdirGlob, quoteValue(path))
 		}
 
@@ -225,12 +232,21 @@ var placeholderPattern = regexp.MustCompile(`\{(\w+)\}`)
 
 // renderGitdirGlob renders rule's layout template into a "gitdir/i"
 // pattern: every field the rule pins is substituted literally, every field
-// it leaves open, including "project", which no rule carries, becomes "*",
-// and the whole pattern is rooted at cfg.Root with a trailing "/**", so it
-// also catches a repository whose remote was renamed or removed after
-// gitcd cloned it there.
+// it leaves open becomes "*", and the whole pattern is rooted at cfg.Root
+// with a trailing "/**", so it also catches a repository whose remote was
+// renamed or removed after gitcd cloned it there.
+//
+// A project is substituted the way the layout renders it, as written, a
+// space included. The depth then follows the template: with the default
+// Azure DevOps layout, "acme/billing/*" ends at the repository, since a
+// dev.azure.com owner never holds a "/".
+//
+// It returns "" when the rule pins a project and the layout has no
+// "{project}" placeholder: no path condition can name the project then, and
+// one without it would match every project of the organisation.
 func renderGitdirGlob(cfg config.Config, rule config.Rule, root string) string {
 	tmpl := cfg.LayoutFor(rule.Host)
+	hasProject := false
 	rendered := placeholderPattern.ReplaceAllStringFunc(tmpl, func(m string) string {
 		name := placeholderPattern.FindStringSubmatch(m)[1]
 		switch name {
@@ -241,6 +257,12 @@ func renderGitdirGlob(cfg config.Config, rule config.Rule, root string) string {
 				return "*"
 			}
 			return rule.Owner
+		case "project":
+			hasProject = true
+			if rule.Project == "" {
+				return "*"
+			}
+			return rule.Project
 		case "repo":
 			if rule.Repo == "" {
 				return "*"
@@ -250,6 +272,9 @@ func renderGitdirGlob(cfg config.Config, rule config.Rule, root string) string {
 			return "*"
 		}
 	})
+	if rule.Project != "" && !hasProject {
+		return ""
+	}
 	// git reads a backslash in a gitdir pattern as an escape, so the
 	// pattern always uses forward slashes, a drive letter path included.
 	return filepath.ToSlash(filepath.Join(root, rendered)) + "/**"
@@ -369,13 +394,14 @@ const azureDevOpsHost = "dev.azure.com"
 // repository under the host.
 //
 // Azure DevOps carries a project segment between the owner and the
-// repository that no rule can pin, since config.Rule has no field for it;
-// its path shape also differs by protocol, "v3/<owner>/<project>/<repo>"
-// over SSH against "<owner>/<project>/_git/<repo>" over HTTPS. Both are
-// handled by wildcarding the project segment instead of matching it, and,
-// when the rule pins only an owner or neither, the open "**" already used
-// for every other host also happens to swallow the project segment, so no
-// Azure specific shape is needed there.
+// repository; its path shape also differs by protocol,
+// "v3/<owner>/<project>/<repo>" over SSH against
+// "<owner>/<project>/_git/<repo>" over HTTPS. A rule that pins a project
+// renders it literally, once as written and once percent encoded when the
+// two differ, see projectForms. A rule that pins none wildcards the
+// segment, and, when it pins only an owner or neither, the open "**"
+// already used for every other host also happens to swallow the project
+// segment, so no Azure specific shape is needed there.
 //
 // The scp form's host only tier needs its own path, distinct from every
 // other tier and every other form: verified directly against git 2.54.0,
@@ -397,15 +423,15 @@ func hasconfigGlobs(cfg config.Config, rule config.Rule) []string {
 
 	var globs []string
 	for _, host := range hosts {
-		for _, p := range scpRepoPathVariants(rule.Owner, rule.Repo, azure) {
+		for _, p := range scpRepoPathVariants(rule.Owner, rule.Project, rule.Repo, azure) {
 			globs = append(globs, fmt.Sprintf("git@%s:%s", host, p))
 		}
 		if !azure {
-			for _, p := range sshRepoPathVariants(rule.Owner, rule.Repo, azure) {
+			for _, p := range sshRepoPathVariants(rule.Owner, "", rule.Repo, azure) {
 				globs = append(globs, fmt.Sprintf("ssh://git@%s/%s", host, p))
 			}
 		}
-		for _, p := range httpsRepoPathVariants(rule.Owner, rule.Repo, azure) {
+		for _, p := range httpsRepoPathVariants(rule.Owner, rule.Project, rule.Repo, azure) {
 			globs = append(globs, fmt.Sprintf("https://%s/%s", host, p))
 			globs = append(globs, fmt.Sprintf("https://*@%s/%s", host, p))
 		}
@@ -424,11 +450,76 @@ func hasconfigGlobs(cfg config.Config, rule config.Rule) []string {
 // Every other tier already has a "/" immediately before its own "**",
 // from the owner segment or, for Azure DevOps, the literal "v3" prefix,
 // so sshRepoPathVariants' path is already correct there.
-func scpRepoPathVariants(owner, repo string, azure bool) []string {
+func scpRepoPathVariants(owner, project, repo string, azure bool) []string {
 	if !azure && owner == "" && repo == "" {
 		return []string{"*/**"}
 	}
-	return sshRepoPathVariants(owner, repo, azure)
+	return sshRepoPathVariants(owner, project, repo, azure)
+}
+
+// projectForms returns every spelling of an Azure DevOps project a stored
+// remote can carry. Git stores a remote as typed, and remote.Parse reads
+// every one of these back to the same project:
+//
+//   - as written, with a literal space
+//   - minimally percent encoded, where only a space and a non ASCII byte
+//     are escaped, "Billing%20(EU)"
+//   - percent encoded the way net/url does, which leaves "&" and "@" alone
+//   - strictly percent encoded, every byte but an RFC 3986 unreserved
+//     character escaped, "Billing%20%28EU%29" and "R%26D"
+//   - each of the encoded forms with lower case hex digits
+//
+// Which of these Azure DevOps itself writes, and with which hex case, is
+// not verified, so every plausible spelling is rendered. A name with
+// nothing to encode has one form. The forms are deduplicated, which keeps a
+// typical name to a handful.
+func projectForms(project string) []string {
+	var forms []string
+	seen := map[string]bool{}
+	add := func(form string) {
+		if !seen[form] {
+			seen[form] = true
+			forms = append(forms, form)
+		}
+	}
+	add(project)
+	// An "@" is written raw or as %40: remote.Parse refuses a raw one in an
+	// HTTPS path, where it reads as the end of user info, but an SSH path
+	// may carry it. The strict form carries the %40 spelling.
+	for _, encoded := range []string{
+		escapeExcept(project, minimalPlain+"@"), escapeExcept(project, minimalPlain),
+		url.PathEscape(project), escapeExcept(project, unreserved),
+	} {
+		add(encoded)
+		add(hexEscape.ReplaceAllStringFunc(encoded, strings.ToLower))
+	}
+	return forms
+}
+
+// hexEscape matches one upper case percent escape.
+var hexEscape = regexp.MustCompile(`%[0-9A-F]{2}`)
+
+const (
+	// unreserved is the punctuation RFC 3986 leaves unreserved.
+	unreserved = "._-~"
+	// minimalPlain is the punctuation a project name may hold that a URL
+	// path carries as it is, besides "@", which is a user info delimiter.
+	minimalPlain = unreserved + "()&!^"
+)
+
+// escapeExcept percent encodes every byte of s but an ASCII letter, a digit
+// and a byte of plain.
+func escapeExcept(s, plain string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x80 && (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte(plain, c) >= 0) {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return b.String()
 }
 
 // sshRepoPathVariants returns the path segment, after "host:" or
@@ -437,35 +528,55 @@ func scpRepoPathVariants(owner, repo string, azure bool) []string {
 // pinned, a wildcard where its project segment sits, which the SSH path
 // never omits and a rule never pins; it carries no ".git" suffix, unlike
 // every other host.
-func sshRepoPathVariants(owner, repo string, azure bool) []string {
+func sshRepoPathVariants(owner, project, repo string, azure bool) []string {
 	if !azure {
 		return repoPathVariants(owner, repo)
 	}
+	var variants []string
 	switch {
+	case project != "" && repo != "":
+		for _, p := range projectForms(project) {
+			variants = append(variants, "v3/"+owner+"/"+p+"/"+repo)
+		}
+	case project != "":
+		for _, p := range projectForms(project) {
+			variants = append(variants, "v3/"+owner+"/"+p+"/**")
+		}
 	case repo != "":
-		return []string{"v3/" + owner + "/*/" + repo}
+		variants = []string{"v3/" + owner + "/*/" + repo}
 	case owner != "":
-		return []string{"v3/" + owner + "/**"}
+		variants = []string{"v3/" + owner + "/**"}
 	default:
-		return []string{"v3/**"}
+		variants = []string{"v3/**"}
 	}
+	return variants
 }
 
 // httpsRepoPathVariants is sshRepoPathVariants for the HTTPS path, which
 // carries no "v3" prefix but does carry the literal "_git" segment right
 // before the repository, once a repo is pinned.
-func httpsRepoPathVariants(owner, repo string, azure bool) []string {
+func httpsRepoPathVariants(owner, project, repo string, azure bool) []string {
 	if !azure {
 		return repoPathVariants(owner, repo)
 	}
+	var variants []string
 	switch {
+	case project != "" && repo != "":
+		for _, p := range projectForms(project) {
+			variants = append(variants, owner+"/"+p+"/_git/"+repo)
+		}
+	case project != "":
+		for _, p := range projectForms(project) {
+			variants = append(variants, owner+"/"+p+"/**")
+		}
 	case repo != "":
-		return []string{owner + "/*/_git/" + repo}
+		variants = []string{owner + "/*/_git/" + repo}
 	case owner != "":
-		return []string{owner + "/**"}
+		variants = []string{owner + "/**"}
 	default:
-		return []string{"**"}
+		variants = []string{"**"}
 	}
+	return variants
 }
 
 // repoPathVariants is the non Azure DevOps path shape shared by the scp

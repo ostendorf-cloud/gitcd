@@ -390,13 +390,18 @@ past the rule that named it, and an upward segment roots it outside the configur
 ## `rules`
 
 Decides which `profiles` entry a remote resolves to. Each rule names a `host`, required, and may
-narrow the match further with `owner` and, alongside `owner`, `repo`; an empty field matches
-every value of that field, and the rule's `profile` must name an entry in `profiles`.
+narrow the match further with `owner` and, alongside `owner`, `project` and `repo`; an empty
+field matches every value of that field, and the rule's `profile` must name an entry in
+`profiles`.
 
 ```yaml
 rules:
   - host: dev.azure.com
     profile: work
+  - host: dev.azure.com
+    owner: acme
+    project: billing
+    profile: billing
   - host: github.com
     owner: acme
     profile: private
@@ -408,12 +413,24 @@ rules:
 
 ### Rule specificity
 
-The most specific matching rule wins, ranked by how many fields narrow it: a host only rule is
-least specific, a host and owner rule is more specific, and a host, owner and repo rule is most
-specific. This ranking, not the order the file lists rules in, decides which one applies. A
-general rule written last in the file never overrides a specific one written earlier, and a
-specific rule written last never needs to be: both resolve to whichever rule actually narrows
-the match furthest, every time.
+The most specific matching rule wins. A rule with more fields is more specific, and the shapes
+a rule can have form one total order, from least to most specific:
+
+1. `host`
+2. `host` and `owner`
+3. `host`, `owner` and `project`
+4. `host`, `owner` and `repo`
+5. `host`, `owner`, `project` and `repo`
+
+A rule that pins a repository outranks one that pins only a project, since a project holds many
+repositories and a repository name is the narrower choice. Two rules of the same shape that both
+match the same remote are ordered by their field values and then their profile name. Avoid such a
+pair, since the later one wins.
+
+This ranking, not the order the file lists rules in, decides which one applies. A general rule
+written last in the file never overrides a specific one written earlier, and a specific rule
+written last never needs to be: both resolve to whichever rule actually narrows the match
+furthest, every time.
 
 The same ranking decides the order gitcd renders the generated `includeIf` blocks in, from least
 to most specific, because a later block in that generated file wins over an earlier one, by
@@ -421,18 +438,91 @@ git's own behaviour. Rule order in the YAML file never affects this rendering or
 
 ### What a rule field may be
 
-A rule's `host`, `owner` and `repo` are written literally into the conditions of the generated
-include file. The character class differs per field:
+A rule's `host`, `owner`, `project` and `repo` are written literally into the conditions of the
+generated include file. The character class differs per field:
 
 - `host` holds letters, digits, `.` and `-`, and begins and ends with a letter or a digit. An
   underscore is refused, unlike in a host alias.
 - `owner` holds letters, digits, `.`, `-` and `_`, with `/` between segments so a group and
-  subgroup can be named as one. No segment is empty, `.` or `..`.
+  subgroup can be named as one. No segment is empty, `.` or `..`. On `dev.azure.com` the owner is
+  the organisation alone: an owner with a `/` there is refused, and the message names `project`.
+- `project` holds letters, combining marks, digits and `. - _ ( ) & ! @ ^ ~`, in words joined by
+  single spaces, since an Azure DevOps project name may hold a space and these characters. It
+  has no leading, trailing or doubled space. It does not start with `_` or `.`, does not end with
+  `.`, and is at most 64 characters long, the limits Azure DevOps sets. Only the characters above
+  are accepted. `@` and `&` are URL delimiters and are accepted on purpose, since Azure DevOps
+  allows them in a name and `apply` renders them both raw and percent encoded. The glob
+  characters `* ? [ ] \` are refused, since git would read them as a pattern and the condition
+  would match more than the rule names. A `%` is refused too, since it would read as a percent
+  escape in a URL. A word may not start with a combining mark, and a variation selector
+  (U+FE0E, U+FE0F) or a zero width character (U+200B to U+200D, U+2060, U+FEFF) is refused,
+  since they allow names that look alike. The composed and the decomposed spelling of an accented
+  letter are both accepted.
 - `repo` holds letters, digits, `.`, `-` and `_`, and is not `.` or `..`.
 
 A glob is not accepted in any of them: leaving a field out already matches every value of that
 field, while a `*` in an `owner` would silently apply the rule's identity and signing key to
 repositories it does not name.
+
+### Naming an Azure DevOps project
+
+An Azure DevOps remote carries an organisation, a project and a repository, and `owner` is the
+organisation. A project is its own field:
+
+```yaml
+rules:
+  - host: dev.azure.com
+    owner: acme
+    project: billing
+    profile: billing
+  - host: dev.azure.com
+    owner: acme
+    project: My Project
+    profile: billing
+```
+
+`owner: acme/billing` for `dev.azure.com` never matched a remote, since gitcd reads the
+organisation `acme` from it. It is refused now, with a message that names `project`, so a
+configuration file that holds such a rule fails to load until the rule is split into `owner` and
+`project`. A GitLab style owner with a `/`, a group and a subgroup, stays valid on every other
+host.
+
+`project` needs `owner` and is refused without it. It is also refused for any host but
+`dev.azure.com`. Only a `dev.azure.com` remote, under its aliases `ssh.dev.azure.com` and
+`vs-ssh.visualstudio.com` too, carries a project, so on another host the rule could never match.
+
+`apply` renders the project into both kinds of condition:
+
+- The `gitdir/i` condition follows the host's layout. With the default `{host}/{org}/{project}/{repo}`
+  it reads `<root>/dev.azure.com/acme/billing/*/**`. The project is written as the layout writes
+  it, a space included. A layout with no `{project}` placeholder renders no path condition for a
+  rule with a project, since it could not tell one project from another. The URL conditions still
+  apply.
+- The `hasconfig` conditions cover every Azure DevOps form, for the host and each alias:
+  `https://dev.azure.com/acme/billing/...`, the same with user info as in
+  `https://acme@dev.azure.com/...`, and `git@ssh.dev.azure.com:v3/acme/billing/...`.
+  A project that holds a space, a non ASCII character or a character a URL escapes is rendered
+  once as written and once for each percent encoding, because git stores a remote as it was
+  typed: minimally encoded (`Billing%20(EU)`) and fully encoded (`Billing%20%28EU%29`). Each
+  encoding is rendered with upper and lower case hex digits.
+
+gitcd reads every spelling back as one project, in the HTTPS, the SSH and the bare
+`host/owner/project/repo` form. A percent escape in an SSH path or in the bare form is decoded,
+so a clone placed at a path that holds the escape literally, as `my%20project`, shows up as a
+`path-mismatch` in `gitcd doctor`. Which spelling Azure DevOps itself writes into the SSH URL of
+a project with a space or a non ASCII character, and with which hex case, is not verified, so
+all of them match. `gitcd clone` builds the SSH and HTTPS URL of a shorthand with the project
+percent encoded.
+
+### Case of owner, project and repo
+
+Owner, project and repo match by exact case, in every command and in the `hasconfig`
+conditions, even though Azure DevOps treats organisation and project names as case insensitive.
+The `gitdir/i` path condition ignores case. A rule that matches a repository except for the case
+of one of these fields is never applied by gitcd, so `profile show` and `doctor` expect another
+profile. Inside the layout path git may still apply it through the path condition. `gitcd doctor`
+then reports both the identity drift and `rule-case-mismatch`. Write the field as the remote
+spells it.
 
 ## `defaultProfile`
 

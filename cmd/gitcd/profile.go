@@ -261,6 +261,9 @@ func describeExpected(repo profile.Repo) string {
 	if rule.Owner != "" {
 		fields = append(fields, fmt.Sprintf("owner=%q", rule.Owner))
 	}
+	if rule.Project != "" {
+		fields = append(fields, fmt.Sprintf("project=%q", rule.Project))
+	}
 	if rule.Repo != "" {
 		fields = append(fields, fmt.Sprintf("repo=%q", rule.Repo))
 	}
