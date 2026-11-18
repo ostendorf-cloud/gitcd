@@ -6,9 +6,9 @@ name: renovate
 # request react within one run instead of waiting for the next schedule tick. The anti-loop
 # condition lives inside the reusable workflow, so this caller needs none.
 on:
-  # Off-peak, staggered away from the other repositories' schedules.
+  # Staggered away from the other repositories' schedules.
   schedule:
-    - cron: "46 4 * * *"
+    - cron: "46 * * * *"
   workflow_dispatch:
   issues:
     types: [edited]
