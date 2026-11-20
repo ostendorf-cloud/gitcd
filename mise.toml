@@ -13,7 +13,7 @@ gitleaks = "8"
 # writes (1.28.0 since 2.20.2, 1.12.0 before), and scripts/check-winget-manifest.sh compares
 # it with a skeleton. A newer GoReleaser changes it, so a bump is a deliberate change with
 # the skeleton updated.
-goreleaser = "2.20.2"
+goreleaser = "2.20.3"
 # Signs the release checksums, see docs/adr/0004-keyless-signing.md. The 3.x line
 # writes the bundle format by default.
 cosign = "3.1"
