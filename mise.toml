@@ -5,7 +5,7 @@ task = "3"
 # cannot read the stdlib export data of a newer one, so the two versions move together.
 golangci-lint = "2.15.0"
 actionlint = "1"
-markdownlint-cli2 = "0.24.1"
+markdownlint-cli2 = "0.24.2"
 yamllint = "1"
 gitleaks = "8"
 "aqua:google/addlicense" = "1.2.0"
