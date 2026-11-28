@@ -958,6 +958,9 @@ func (c Config) Validate() error {
 	if err := ValidateRoot(c.Root); err != nil {
 		return err
 	}
+	if err := ValidateWorktreeDir(c.WorktreeDir); err != nil {
+		return err
+	}
 	if err := c.validateProfiles(); err != nil {
 		return err
 	}
