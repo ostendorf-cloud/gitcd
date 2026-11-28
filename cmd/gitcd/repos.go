@@ -43,6 +43,10 @@ import (
 //     repository shares that repository's remote and local git
 //     configuration, so fetching or checking one again repeats exactly
 //     what its main checkout's own pass already covered.
+//   - "worktree --repo" passes false: it resolves the query to a main
+//     checkout, then asks git for that repository's worktrees itself, so
+//     a query matching a repository and each of its worktrees stays
+//     unambiguous.
 //
 // The result is sorted once here, by repoName, before any caller sees
 // it: the deleted discoverRepos sorted its own results the same way, and

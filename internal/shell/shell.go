@@ -4,9 +4,10 @@
 // Package shell renders the per shell init snippet "gitcd shell-init"
 // prints. Each snippet defines a "gitcd" function that shadows the binary:
 // it calls through to the real "gitcd" for every command, and for "clone",
-// "path" and "cd", the commands that print a path on stdout, changes the
-// shell's working directory to it when that path actually exists, since
-// "clone --dry-run" prints a path it deliberately never created. Every
+// "path", "cd" and "worktree", also spelled "wt", the commands that print a
+// path on stdout, changes the shell's working directory to it when that
+// path actually exists, since "clone --dry-run" prints a path it
+// deliberately never created, and so does "worktree add --dry-run". Every
 // other command's output passes through unchanged, because the binary
 // itself already put it on stdout for exactly this purpose. The zsh,
 // fish and PowerShell snippets also register tab completion for "cd",
@@ -30,7 +31,7 @@ const bashLike = `gitcd() {
   local real
   real="$(command gitcd "$@")" || return $?
   case "$1" in
-    clone|path|cd)
+    clone|path|cd|worktree|wt)
       if [ -d "$real" ]; then
         cd -- "$real"
       else
@@ -95,7 +96,7 @@ const fish = `function gitcd
         return $code
     end
     switch $argv[1]
-        case clone path cd
+        case clone path cd worktree wt
             if test -d "$real"
                 cd $real
             else
@@ -153,7 +154,7 @@ const powerShell = `function gitcd {
         return
     }
     switch ($args[0]) {
-        { $_ -in 'clone', 'path', 'cd' } {
+        { $_ -in 'clone', 'path', 'cd', 'worktree', 'wt' } {
             if (Test-Path -LiteralPath $real -PathType Container) {
                 Set-Location -LiteralPath $real
             } else {

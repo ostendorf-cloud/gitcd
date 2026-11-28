@@ -177,6 +177,12 @@ type Config struct {
 	// is not accepted, and an entry naming a key that is not refused by
 	// default is an error rather than a no-op, so a typo is visible.
 	AllowUnsafeKeys []string
+	// WorktreeDir is the directory "gitcd worktree add" creates worktrees
+	// in: a path relative to the repository's main checkout, or an absolute
+	// path that may carry the "{repo}" placeholder, with a leading "~"
+	// already expanded. Empty when the file sets none, in which case there
+	// is no "worktree add" and no other command changes.
+	WorktreeDir string
 }
 
 // Default returns the configuration applied when no file exists.
@@ -227,6 +233,8 @@ type raw struct {
 	UseConfigOnly  *bool                        `yaml:"useConfigOnly"`
 
 	AllowUnsafeKeys []string `yaml:"allowUnsafeKeys"`
+
+	WorktreeDir *string `yaml:"worktreeDir"`
 }
 
 // Load reads the first of ~/.gitcd.yaml and $XDG_CONFIG_HOME/gitcd/config.yaml
@@ -384,6 +392,13 @@ func LoadFrom(path string) (cfg Config, err error) {
 	}
 
 	cfg.AllowUnsafeKeys = append([]string(nil), r.AllowUnsafeKeys...)
+
+	if r.WorktreeDir != nil {
+		cfg.WorktreeDir, err = expandHome(*r.WorktreeDir, home)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
+		}
+	}
 
 	if len(r.Profiles) > 0 {
 		cfg.Profiles = make(map[string]Profile, len(r.Profiles))

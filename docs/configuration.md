@@ -71,6 +71,31 @@ either of two cases:
 
 Symlinks below the repository level, inside a repository's own directory tree, are not handled.
 
+## `worktreeDir`
+
+Where `gitcd worktree add` creates a worktree. Unset by default, and `worktree add` then refuses
+to run. The picker `gitcd worktree` does not need it.
+
+```yaml
+worktreeDir: .claude/worktrees
+```
+
+- A relative value is joined onto the repository's main checkout: `.claude/worktrees` puts
+  `feat/20-menu` at `<repo>/.claude/worktrees/feat/20-menu`.
+- An absolute value is used as written, and a leading `~` is expanded against the loading user's
+  home directory. `{repo}` becomes the repository's directory name, so `~/Worktrees/{repo}` keeps
+  every repository's worktrees apart.
+- `{repo}` is the only placeholder. A segment `..`, a control character or any other
+  placeholder is an error when the file loads, so every command fails on it, not only
+  `worktree add`.
+- The branch name is appended below it, a slash nesting directories. A branch name that is
+  absolute, holds a backslash or a colon, or has an empty, `.` or `..` segment is refused.
+
+`list` shows worktrees by the rule it already has: a linked worktree is hidden unless
+`--worktrees` is given, wherever `worktreeDir` puts it. gitcd walks `root`, so a worktree whose
+directory is outside `root` is not found by `list`, `cd` or `status` at all, only by
+`gitcd worktree`, which asks git.
+
 ## `layout.default`
 
 The path template applied to a host with no `layout` key of its own, and the fallback a host's
