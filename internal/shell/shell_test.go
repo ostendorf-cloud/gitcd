@@ -198,6 +198,84 @@ func TestWrapper_BareCallRunsTheBinaryUnderStrictShellOptions(t *testing.T) {
 	}
 }
 
+// TestWrapper_WorktreeCommandChangesDirectory sources the bash and zsh
+// snippets and calls "worktree" and its spelling "wt" against a fake
+// "gitcd" that prints an existing directory. The wrapper must change into
+// it. "worktree add --dry-run" prints a path it never created, so the
+// wrapper must print that path instead of changing into it.
+func TestWrapper_WorktreeCommandChangesDirectory(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	missing := filepath.Join(target, "never-created")
+	fakeBin := t.TempDir()
+	fakeScript := "#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"  *--dry-run*) printf '%s\\n' \"$GITCD_MISSING\" ;;\n" +
+		"  *) printf '%s\\n' \"$GITCD_TARGET\" ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(fakeBin, "gitcd"), []byte(fakeScript), 0o755); err != nil {
+		t.Fatalf("write the fake gitcd: %v", err)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", target, err)
+	}
+
+	shells := []struct {
+		name    string
+		snippet string
+	}{
+		{name: "bash", snippet: shell.Bash()},
+		{name: "zsh", snippet: shell.Zsh()},
+	}
+	calls := []struct {
+		name string
+		call string
+		want string
+	}{
+		{name: "worktree", call: "gitcd worktree menu", want: resolvedTarget + "\n"},
+		{name: "wt", call: "gitcd wt menu", want: resolvedTarget + "\n"},
+		{name: "wt add", call: "gitcd wt add feat/x", want: resolvedTarget + "\n"},
+		{name: "a dry run of a path never created", call: "gitcd wt add --dry-run feat/x", want: missing + "\n"},
+	}
+	for _, sh := range shells {
+		for _, tc := range calls {
+			t.Run(sh.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				path, err := exec.LookPath(sh.name)
+				if err != nil {
+					t.Skipf("%s is not installed", sh.name)
+				}
+				file := filepath.Join(t.TempDir(), "init.sh")
+				if err := os.WriteFile(file, []byte(sh.snippet), 0o644); err != nil {
+					t.Fatalf("write %s: %v", file, err)
+				}
+				// pwd -P prints the directory the shell ended up in.
+				script := "compdef() { :; }\n. \"$1\"\ncd /\n" + tc.call + " >/dev/null\nwd=\"$(pwd -P)\"\n" +
+					"if [ \"$wd\" = \"/\" ]; then printf '%s\\n' \"$(" + tc.call + ")\"; else printf '%s\\n' \"$wd\"; fi\n"
+
+				cmd := exec.CommandContext(context.Background(), path, "-c", script, "--", file)
+				cmd.Env = append(os.Environ(),
+					"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+					"GITCD_TARGET="+target,
+					"GITCD_MISSING="+missing,
+				)
+				var stdout, stderr strings.Builder
+				cmd.Stdout = &stdout
+				cmd.Stderr = &stderr
+				if err := cmd.Run(); err != nil {
+					t.Fatalf("%s: %v, stderr %q", tc.call, err, stderr.String())
+				}
+				if stdout.String() != tc.want {
+					t.Fatalf("%s ended in %q, want %q", tc.call, stdout.String(), tc.want)
+				}
+			})
+		}
+	}
+}
+
 // TestFish_GuardsABareCall checks the fish snippet by string match only,
 // since fish is not installed here: an empty "$argv" expands to no word at
 // all, so "switch $argv[1]" has to stay behind a guard that runs the

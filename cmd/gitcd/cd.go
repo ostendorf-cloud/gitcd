@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -91,9 +92,22 @@ func runCd(args []string, stdin io.Reader, isTerminal bool, stdout, stderr io.Wr
 // repository scan could not inspect, such as one with no remote, stays a
 // candidate, and so does every worktree of one.
 func cdCandidates(ctx context.Context, cfg config.Config, managedDir string, logger *slog.Logger) ([]cdCandidate, error) {
-	results, err := scanRepositories(ctx, cfg, managedDir, true)
+	candidates, err := repoCandidates(ctx, cfg, managedDir, true, logger)
 	if err != nil {
 		return nil, fmt.Errorf("cd: %w", err)
+	}
+	return candidates, nil
+}
+
+// repoCandidates is cdCandidates with the worktree rule left to the
+// caller: "gitcd worktree --repo" resolves its query to a repository's
+// main checkout and passes false, since a query matching one repository's
+// main checkout and each of its worktrees would otherwise always be
+// ambiguous.
+func repoCandidates(ctx context.Context, cfg config.Config, managedDir string, includeWorktrees bool, logger *slog.Logger) ([]cdCandidate, error) {
+	results, err := scanRepositories(ctx, cfg, managedDir, includeWorktrees)
+	if err != nil {
+		return nil, err
 	}
 
 	candidates := make([]cdCandidate, 0, len(results))
@@ -169,16 +183,38 @@ func resolveQuery(query string, candidates []cdCandidate, stdin io.Reader, isTer
 // error naming query without reading anything: the candidates are already
 // listed on stderr by the time that error is returned.
 func pick(query string, candidates []cdCandidate, stdin io.Reader, isTerminal bool, stderr io.Writer) (cdCandidate, error) {
-	fmt.Fprintf(stderr, "%q matches more than one repository:\n", query)
+	labels := make([]string, len(candidates))
 	for i, c := range candidates {
-		fmt.Fprintf(stderr, "  %d) %s\n", i+1, c.path)
+		labels[i] = c.path
+	}
+	idx, err := pickIndex(
+		fmt.Sprintf("%q matches more than one repository:", query),
+		fmt.Sprintf("more than one repository matches %q, and stdin is not a terminal to pick one", query),
+		fmt.Sprintf("%q", query),
+		labels, stdin, isTerminal, stderr,
+	)
+	if err != nil {
+		return cdCandidate{}, err
+	}
+	return candidates[idx], nil
+}
+
+// pickIndex is the picker "cd" and "worktree" share: it prints header and
+// labels as a numbered list on stderr, then reads one choice from stdin and
+// returns its zero based index. notTerminal is the error text returned,
+// after the list is printed, when stdin is not a terminal. subject names
+// what was being picked in the error for an empty read.
+func pickIndex(header, notTerminal, subject string, labels []string, stdin io.Reader, isTerminal bool, stderr io.Writer) (int, error) {
+	fmt.Fprintln(stderr, header)
+	for i, label := range labels {
+		fmt.Fprintf(stderr, "  %d) %s\n", i+1, label)
 	}
 
 	if !isTerminal {
-		return cdCandidate{}, fmt.Errorf("more than one repository matches %q, and stdin is not a terminal to pick one", query)
+		return 0, errors.New(notTerminal)
 	}
 
-	fmt.Fprintf(stderr, "pick one [1-%d]: ", len(candidates))
+	fmt.Fprintf(stderr, "pick one [1-%d]: ", len(labels))
 	scanner := bufio.NewScanner(stdin)
 	if !scanner.Scan() {
 		// isTerminal came from isTerminalFile, which cannot tell a real
@@ -186,14 +222,14 @@ func pick(query string, candidates []cdCandidate, stdin io.Reader, isTerminal bo
 		// as /dev/null or /dev/zero that was never a terminal at all: an
 		// empty read here honestly could be either, so the message
 		// names both rather than asserting the one isTerminal claimed.
-		return cdCandidate{}, fmt.Errorf("no selection was read for %q: stdin produced no input, which also happens when it is not actually an interactive terminal", query)
+		return 0, fmt.Errorf("no selection was read for %s: stdin produced no input, which also happens when it is not actually an interactive terminal", subject)
 	}
 	choice := strings.TrimSpace(scanner.Text())
 	idx, err := strconv.Atoi(choice)
-	if err != nil || idx < 1 || idx > len(candidates) {
-		return cdCandidate{}, fmt.Errorf("%q is not a valid choice between 1 and %d", choice, len(candidates))
+	if err != nil || idx < 1 || idx > len(labels) {
+		return 0, fmt.Errorf("%q is not a valid choice between 1 and %d", choice, len(labels))
 	}
-	return candidates[idx-1], nil
+	return idx - 1, nil
 }
 
 // isTerminalFile reports whether f is likely connected to an interactive
