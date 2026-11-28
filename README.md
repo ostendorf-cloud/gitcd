@@ -59,8 +59,8 @@ a dependency.
 
 ### Shell integration
 
-`clone`, `path` and `cd` print a path. A shell function around the binary turns that into a `cd`.
-Add the line for your shell to its startup file:
+`clone`, `path`, `cd` and `worktree` print a path. A shell function around the binary turns that
+into a `cd`. Add the line for your shell to its startup file:
 
 ```sh
 eval "$(gitcd shell-init zsh)"    # ~/.zshrc
@@ -100,6 +100,7 @@ stderr. `--verbose` enables debug logging. `--dry-run` previews a command that w
 | `clone <remote>` | Clones into the rendered path and prints it. A second run prints the path again. |
 | `path <query>` | Prints the path of one cloned repository. |
 | `cd <query>` | Matches a partial name and prints the path. |
+| `worktree [filter]` | Picks a worktree of the current repository and prints its path. `wt` is the short spelling. `worktree add <branch>` creates one. |
 | `list` | Prints every repository under the root. `--json` and `--worktrees` change the output. |
 | `status` | Prints one row per repository. `--strict` exits non zero when any is dirty. |
 | `sync` | Fetches every repository. It never pulls, rebases or merges. |

@@ -10,8 +10,8 @@ alongside the command's own usage line. `doctor`, `status --strict` and `sync` r
 prompt or a CI step gate on them without parsing a line of output.
 
 A command writes nothing but its own result to stdout. Every log line, every progress message
-and every error goes to stderr, so `clone`, `path` and `cd`, each of which prints a path on
-success, can be wrapped by the shell function `shell-init` emits without that function ever
+and every error goes to stderr, so `clone`, `path`, `cd` and `worktree`, each of which prints a
+path on success, can be wrapped by the shell function `shell-init` emits without that function ever
 seeing anything on stdout but the path itself. `--verbose` adds debug logging on stderr; it
 never changes what a command writes on stdout.
 
@@ -200,6 +200,83 @@ Exit codes:
 - `1`: no repository matched the query, or more than one did and no selection could be read, an
   empty read, an out of range choice, or stdin was not an interactive terminal.
 - `2`: not exactly one query was given.
+
+## worktree
+
+Also spelled `wt`. Picks one worktree of a repository, the main checkout and every linked
+worktree, and prints its path on stdout: the shell function `shell-init` emits wraps it to change
+directory. The repository is the one the working directory is in, a linked worktree of it
+included, or the one `--repo` names.
+
+```sh
+gitcd worktree [filter]
+gitcd worktree --repo <query> [filter]
+```
+
+The picker lists the main checkout first, marked `(main)`, then the linked worktrees by branch
+and path. Each line shows the branch, the state (`clean`, `dirty`, `unborn` or `error`, as
+`status` reports it) and the path. A locked worktree says so. A bare repository entry and a
+worktree git marks prunable, whose directory is gone, are left out.
+
+An optional filter narrows the list. An exact match against a branch name, a directory name or a
+full path, case insensitively, wins outright. Lacking one, every worktree whose branch or
+directory name contains the filter as a case insensitive substring matches. One match prints its
+path without a prompt. More than one opens the numbered picker on stderr: with a terminal on
+stdin it reads a selection, without one it exits non zero with the candidates already listed.
+Without a filter every worktree is a candidate, so the picker always opens when a linked worktree
+exists.
+
+- `--repo <query>` resolves the query like `cd` does, but against main checkouts only, and picks
+  among that repository's worktrees.
+- `--verbose` enables debug logging on stderr.
+
+```sh
+$ gitcd worktree menu
+/home/me/Code/github.com/acme/widget/.claude/worktrees/feat/20-menu
+```
+
+Exit codes:
+
+- `0`: one worktree was chosen, directly or through the picker.
+- `1`: the working directory is in no repository and `--repo` was not given, the repository has
+  no linked worktree, no worktree matches the filter, or more than one does and no selection
+  could be read.
+- `2`: a flag was wrong or more than one filter was given.
+
+### worktree add
+
+Creates a worktree for a branch under the configured [`worktreeDir`](configuration.md#worktreedir)
+and prints its path on stdout. git's own output goes to stderr.
+
+```sh
+gitcd worktree add [--repo <query>] [--base <rev>] [--dry-run] <branch>
+```
+
+- The branch is created when it does not exist, started at `--base` or at the repository's
+  `HEAD`. An existing local branch is checked out instead, and `--base` is then refused.
+- A slash in the branch nests directories: `feat/20-menu` becomes `feat/20-menu` below
+  `worktreeDir`.
+- `--dry-run` prints the path and a line on stderr saying what would be created. It creates
+  neither the branch nor the directory.
+- `--repo <query>` names the repository, as for the picker. From inside a linked worktree the
+  main checkout is used, so the new worktree lands in the same place either way.
+- `--verbose` enables debug logging on stderr.
+
+The command refuses a branch name git would refuse, a name that would leave `worktreeDir`
+(an absolute path, a `..` segment, a backslash or a colon), and a target path that already
+exists.
+
+```sh
+$ gitcd worktree add feat/40-search
+/home/me/Code/github.com/acme/widget/.claude/worktrees/feat/40-search
+```
+
+Exit codes:
+
+- `0`: the worktree was created, or `--dry-run` printed its path.
+- `1`: `worktreeDir` is not set, the branch name or target is refused, the target exists, or git
+  failed.
+- `2`: a flag was wrong or not exactly one branch was given.
 
 ## init
 
@@ -555,8 +632,8 @@ Exit codes:
 
 Prints the shell integration snippet for one shell on stdout: a `gitcd` function that shadows
 the binary, calling through to the real one for every command and changing the shell's working
-directory for `clone`, `path` and `cd` when the printed path actually exists. The zsh, fish and
-PowerShell snippets also register tab completion for `cd`.
+directory for `clone`, `path`, `cd` and `worktree`, also spelled `wt`, when the printed path
+actually exists. The zsh, fish and PowerShell snippets also register tab completion for `cd`.
 
 The one required argument is `zsh`, `bash`, `fish`, `pwsh` (PowerShell 7) or `powershell`
 (Windows PowerShell 5.1); the two PowerShell editions get an identical snippet.

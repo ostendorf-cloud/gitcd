@@ -42,7 +42,8 @@ comment names it. `list` hides a worktree unless `--worktrees` is given; `cd`, `
 `open` resolve a query to one just as readily as to its main checkout; `status` gives one its
 own row, since its branch and dirty state are its own; `sync` and `doctor` skip one, since it
 shares its main checkout's remote and git configuration and checking or fetching it again
-would only repeat that pass.
+would only repeat that pass. `worktree` asks git for one repository's worktrees directly, so it
+also finds one outside the root.
 
 ## Commands
 
@@ -75,8 +76,8 @@ task run -- clone github.com/acme/widget   # run the CLI from source
   dependency needs a reason in the pull request.
 - No CLI framework. `flag` and hand written dispatch, as in `release-me`.
 - A command writes nothing but its result to stdout; everything else, including every log
-  line, goes to stderr. `clone`, `path` and `cd` print the resolved path on stdout, so a shell
-  function can wrap them.
+  line, goes to stderr. `clone`, `path`, `cd` and `worktree` print the resolved path on stdout,
+  so a shell function can wrap them.
 - Every command that writes supports `--dry-run`.
 - Tests: table driven, git repositories generated under a temporary directory, `HOME`,
   `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM=1` controlled, the git identity variables
